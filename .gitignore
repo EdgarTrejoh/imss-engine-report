@@ -1,0 +1,52 @@
+# Entornos virtuales y caches de Python
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+# Archivos temporales y salidas pesadas del ETL
+temp_*.csv
+imss_analisis_profundo*.csv
+*.parquet
+*.xlsx
+
+# Directorios de datos generados
+data/raw/
+data/interim/
+data/processed/
+logs/
+
+# Auditorias, perfilados y reportes generados
+auditoria*.csv
+auditoria_profunda_*.csv
+valores_unicos_*.csv
+resumen_valores_unicos.csv
+*_schema.csv
+*_nulls.csv
+*_summary.csv
+*_date_range.csv
+*_duplicates_key.csv
+*_numeric_stats.csv
+*_top_*.csv
+
+# Artefactos locales comunes
+.ipynb_checkpoints/
+*.log
+
+# Variables de entorno / secretos futuros
+.env
+.env.*
+!.env.example
+
+# Bases locales o archivos analíticos generados
+*.db
+*.sqlite
+*.sqlite3
+*.duckdb
+
+# Carpeta histórica/procesada local
+procesados/
+
+# Artefactos del sistema operativo
+.DS_Store
+Thumbs.db

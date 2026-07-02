@@ -1,0 +1,9 @@
+pandas
+requests
+PyYAML
+pytest
+duckdb
+polars
+matplotlib
+plotly
+openpyxl
