@@ -1,5 +1,3 @@
-import logging
-logging.basicConfig(level=logging.INFO, format='%(message)s')
 """
 imss_csv_profiler.py
 Perfilado rápido para CSV grande (1GB+), sin explotar RAM.
@@ -10,10 +8,13 @@ Uso:
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 import duckdb
 import polars as pl
+
+logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 
 def human_mb(nbytes: int) -> str:

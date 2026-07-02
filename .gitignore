@@ -11,10 +11,14 @@ imss_analisis_profundo*.csv
 *.xlsx
 
 # Directorios de datos generados
-data/raw/
-data/interim/
-data/processed/
-logs/
+data/raw/*
+!data/raw/.gitkeep
+data/interim/*
+!data/interim/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+logs/*
+!logs/.gitkeep
 
 # Auditorias, perfilados y reportes generados
 auditoria*.csv

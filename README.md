@@ -1,56 +1,64 @@
-# 📊 IMSS Data Pipeline: Análisis Histórico de Asegurados
+# IMSS Engine Report
 
-Este proyecto automatiza la extracción, limpieza y consolidación de los datos abiertos del IMSS (Instituto Mexicano del Seguro Social). El script está diseñado para procesar archivos de gran volumen (millones de registros) de manera eficiente, transformándolos en un resumen analítico listo para Business Intelligence o Ciencia de Datos.
+Pipeline local en Python para descargar, procesar, auditar y analizar datos abiertos del IMSS. El objetivo futuro es convertir este repositorio en un motor de datos laborales, salariales y sectoriales para reportes economicos de Mexico y, posteriormente, integrarlo a un tablero economico central.
 
-## 🚀 Características Principales
-Descarga Resiliente: Utiliza requests con manejo de User-Agent y timeouts para evitar bloqueos por parte del servidor (Error 403).
+## Estado actual
 
-Procesamiento en Disco: Descarga archivos temporales para minimizar el uso de memoria RAM, permitiendo procesar archivos de +500MB en equipos estándar.
+El proyecto esta en una primera reestructura. El ETL historico real sigue en `etl_imss.py`; `main.py`, `imss_etl.py`, `join.py` y `viz.py` fueron separados como codigo legacy o exploratorio.
 
-Normalización Histórica: Detecta automáticamente cambios en el layout de los datos (como la transición de rango_salarial a rango_uma en 2017).
+No hay PostgreSQL, API, dashboard, Docker ni CI/CD en esta etapa.
 
-Agregación Multidimensional: Consolida la información por Entidad, Sexo, Rango de Edad, UMA y Sector Económico.
+## Estructura
 
-## 🛠️ Requisitos
-Para ejecutar este script, necesitas Python 3.x y las siguientes librerías:
-
+```text
+config/              Configuracion local y ejemplo publico
+src/imss_engine/     Paquete base para la futura modularizacion
+scripts/             Wrappers operativos minimos
+tests/               Pruebas unitarias y fixtures
+docs/                Notas tecnicas y documentacion inicial
+legacy/              Scripts historicos o exploratorios
+notebooks/           Notebooks de revision
+data/                Datos locales no versionados
+reports/             Auditorias, perfiles, manifests y figuras generadas
+logs/                Logs locales no versionados
 ```
-Bash
-# Crear entorno virtual
+
+## Uso local
+
+```powershell
 python -m venv .venv
-
-# Activar entorno (Windows)
-.venv\Scripts\activate
-
-# Instalar dependencias
-pip install -r requirements.txt
+.\.venv\Scripts\activate
+python -m pip install -r requirements.txt
 ```
 
-## 📂 Estructura del Proyecto
-**main.py**: Script principal de extracción y procesamiento.
+El ETL historico se ejecuta explicitamente con:
 
-**temp_*.csv**: Archivos temporales (se eliminan automáticamente tras procesarse).
+```powershell
+python etl_imss.py
+```
 
-**imss_analisis_profundo.csv**: El archivo de salida consolidado.
+Tambien existe un wrapper:
 
-## ⚙️ Funcionamiento del Código
-El pipeline sigue este flujo lógico para cada URL proporcionada:
+```powershell
+python scripts/run_etl.py
+```
 
-* **Identificación**: Extrae el periodo de la URL mediante expresiones regulares.
+Importar `etl_imss.py` no debe iniciar descargas. Las descargas solo deben ocurrir al ejecutar el entrypoint.
 
-* **Descarga Segura**: Realiza una petición HTTP simulando un navegador para obtener el archivo .csv.
+## Pruebas
 
-* **Mapeo Dinámico**: * Si el archivo es anterior a febrero de 2017, renombra rango_salarial a rango_uma.
+`pytest` debe usarse con cuidado. La prueba actual importa funciones del ETL historico, por lo que el repositorio debe conservar la guardia `if __name__ == "__main__": main()` para evitar descargas reales durante imports.
 
-* **Normaliza** valores nulos a la etiqueta "no_ligados_a_patron".
+No se debe usar `pytest` como validacion completa del ETL ni contra descargas reales.
 
-* **Cálculo de Métricas**: Suma trabajadores permanentes (urbanos + campo) y eventuales, así como sus masas salariales.
+## Datos y artefactos
 
-* **Consolidación**: Agrupa y suma todos los registros en bloques de 400,000 filas para evitar saturar la memoria.
+Los datos pesados, temporales y salidas generadas no se versionan. Esto incluye `data/raw/`, `data/interim/`, `data/processed/`, `logs/`, CSV grandes, Parquet, bases locales y reportes generados.
 
-## 📝 Notas de Versión
-v1.2: Implementada descarga a disco por flujo (stream) para corregir el bloqueo de pantalla.
+## Riesgos conocidos
 
-v1.1: Añadida lógica de compatibilidad para UMA/Salario Mínimo (Pre-2017).
+Ver:
 
-v1.0: Versión inicial con procesamiento por chunks.
+- `docs/known_issues.md`
+- `docs/data_dictionary.md`
+- `docs/restructure_notes.md`

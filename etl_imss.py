@@ -10,12 +10,8 @@ import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-with open("config.yaml", "r", encoding="utf-8") as f:
-    config = yaml.safe_load(f)["etl"]
-
-URLS = [config["base_url"].format(mes) for mes in config["meses"]]
-OUTPUT_FILE = config["output_file"]
-CHUNK_SIZE = config["chunk_size"]
+OUTPUT_FILE = None
+CHUNK_SIZE = None
 
 # Columnas Base
 COL_ENTIDAD             = "cve_entidad"
@@ -40,6 +36,9 @@ def periodo_from_url(url):
 
 
 def procesar_url(url, first_file):
+    if OUTPUT_FILE is None or CHUNK_SIZE is None:
+        raise RuntimeError("Config no cargada. Ejecuta main() antes de procesar URLs.")
+
     periodo = periodo_from_url(url)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     temp_file = f"temp_{periodo}.csv" # Archivo temporal en disco
@@ -129,9 +128,27 @@ def procesar_url(url, first_file):
     time.sleep(3)
 
 # =================== EJECUCIÓN ======================
-first = True
-for url in URLS:
-    procesar_url(url, first_file=first)
-    first = False
+def main():
+    global OUTPUT_FILE, CHUNK_SIZE
 
-logging.info(f"PROCESO COMPLETO: {OUTPUT_FILE}")
+    config_path = os.path.join(os.path.dirname(__file__), "config", "config.yaml")
+    if not os.path.exists(config_path):
+        config_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)["etl"]
+
+    urls = [config["base_url"].format(mes) for mes in config["meses"]]
+    OUTPUT_FILE = config["output_file"]
+    CHUNK_SIZE = config["chunk_size"]
+
+    first = True
+    for url in urls:
+        procesar_url(url, first_file=first)
+        first = False
+
+    logging.info(f"PROCESO COMPLETO: {OUTPUT_FILE}")
+
+
+if __name__ == "__main__":
+    main()

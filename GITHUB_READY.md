@@ -8,7 +8,7 @@ Este proyecto contiene un pipeline ETL local para descargar, transformar, agrega
 
 Estado clasificado: **ETL funcional local / prototipo tecnico avanzado**.
 
-El nucleo del procesamiento esta implementado en `etl_imss.py` y usa `config.yaml` para construir las URLs, definir los periodos a procesar, el tamano de chunk y el archivo de salida. Existen scripts auxiliares para auditoria, perfilado, exportaciones con DuckDB y visualizacion.
+El nucleo del procesamiento historico esta implementado en `etl_imss.py` y usa `config/config.yaml` para construir las URLs, definir los periodos a procesar, el tamano de chunk y el archivo de salida. Existen scripts auxiliares para auditoria, perfilado y exportaciones con DuckDB. El proyecto esta en reestructura inicial.
 
 ## Archivos excluidos
 
@@ -37,30 +37,33 @@ Se consideran versionables los archivos fuente, configuracion publica y document
 - `GITHUB_READY.md`
 - `.gitignore`
 - `requirements.txt`
-- `config.yaml`
+- `config/config.yaml`
+- `config/config.example.yaml`
 - `etl_imss.py`
-- `imss_etl.py`
 - `audit.py`
 - `auditoria_profunda.py`
 - `filtrar_valores.py`
 - `imss_csv_profiler.py`
 - `imss_csv_profiler_export.py`
 - `imss_duckdb_exports.py`
-- `join.py`
-- `main.py`
-- `viz.py`
-- `review.ipynb`
+- `legacy/imss_etl_legacy.py`
+- `legacy/join_manual_legacy.py`
+- `legacy/main_analysis_legacy.py`
+- `legacy/viz_exploratory_legacy.py`
+- `notebooks/review.ipynb`
+- `src/imss_engine/`
+- `scripts/`
+- `docs/`
 - `tests/test_etl.py`
 
-## Revision de config.yaml
+## Revision de config/config.yaml
 
-`config.yaml` no contiene credenciales, tokens, usuarios, contrasenas ni rutas privadas sensibles. Contiene una URL publica del IMSS, parametros de ejecucion y lista de meses. Por lo tanto, se deja como archivo versionable.
+`config/config.yaml` no contiene credenciales, tokens, usuarios, contrasenas ni rutas privadas sensibles. Contiene una URL publica del IMSS, parametros de ejecucion y lista de meses. Por lo tanto, se deja como archivo versionable.
 
 ## Advertencias conocidas
 
-- No ejecutar `pytest` sin ajustar primero `etl_imss.py`, porque `tests/test_etl.py` importa `etl_imss.py` y ese archivo ejecuta el pipeline a nivel global.
-- `etl_imss.py` no tiene guardia `if __name__ == "__main__"`, por lo que importar funciones dispara la ejecucion completa.
-- `main.py`, `viz.py` y `join.py` contienen nombres de archivo o rutas hardcodeadas.
+- `etl_imss.py` ya tiene guardia `if __name__ == "__main__"`, pero no se debe remover porque evita descargas al importar funciones.
+- `legacy/main_analysis_legacy.py`, `legacy/viz_exploratory_legacy.py` y `legacy/join_manual_legacy.py` contienen nombres de archivo o rutas hardcodeadas.
 - El proyecto depende de disponibilidad de red y del portal de datos del IMSS para ejecutar el ETL.
 - Las dependencias en `requirements.txt` no estan fijadas por version.
 - El entorno virtual local `.venv/` no debe subirse a GitHub.
@@ -90,7 +93,7 @@ Si el repositorio aun no esta inicializado correctamente:
 ```powershell
 git init
 git status
-git add .gitignore GITHUB_READY.md README.md requirements.txt config.yaml *.py tests/test_etl.py review.ipynb
+git add .gitignore GITHUB_READY.md README.md requirements.txt config/ src/ scripts/ docs/ legacy/ notebooks/ tests/ pyproject.toml *.py
 git status
 ```
 

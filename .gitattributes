@@ -1,0 +1,31 @@
+﻿# Normalize text files in repository
+* text=auto
+
+# Python / config / docs
+*.py text eol=lf
+*.md text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf
+*.txt text eol=lf
+*.gitignore text eol=lf
+*.gitattributes text eol=lf
+
+# Notebooks are text JSON but can be noisy; keep normalized
+*.ipynb text eol=lf
+
+# CSV outputs are generated artifacts; if ever tracked, keep normalized
+*.csv text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.xlsx binary
+*.parquet binary
+*.duckdb binary
+*.sqlite binary
+*.sqlite3 binary
+*.db binary

@@ -1,8 +1,10 @@
-import pytest
 import pandas as pd
 import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# Importing etl_imss must not trigger downloads or pipeline execution.
 from etl_imss import periodo_from_url
 from audit import normalizar_serie
 

@@ -1,11 +1,12 @@
-import logging
-logging.basicConfig(level=logging.INFO, format='%(message)s')
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 import duckdb
 import polars as pl
+
+logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 
 def human_mb(nbytes: int) -> float:

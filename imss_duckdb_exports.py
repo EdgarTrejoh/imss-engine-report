@@ -1,10 +1,12 @@
-import logging
-logging.basicConfig(level=logging.INFO, format='%(message)s')
 # imss_duckdb_exports.py
 from __future__ import annotations
+
+import logging
 import sys
 from pathlib import Path
 import duckdb
+
+logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 def main(csv_path: str):
     path = Path(csv_path).expanduser().resolve()
