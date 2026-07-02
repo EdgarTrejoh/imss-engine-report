@@ -54,3 +54,16 @@ procesados/
 # Artefactos del sistema operativo
 .DS_Store
 Thumbs.db
+
+# Reportes generados
+reports/audits/*
+!reports/audits/.gitkeep
+
+reports/profiles/*
+!reports/profiles/.gitkeep
+
+reports/manifests/*
+!reports/manifests/.gitkeep
+
+reports/figures/*
+!reports/figures/.gitkeep
