@@ -10,6 +10,8 @@ Estado clasificado: **ETL funcional local / prototipo tecnico avanzado**.
 
 El nucleo del procesamiento historico esta implementado en `etl_imss.py` y usa `config/config.yaml` para construir las URLs, definir los periodos a procesar, el tamano de chunk y el archivo de salida. Existen scripts auxiliares para auditoria, perfilado y exportaciones con DuckDB. El proyecto esta en reestructura inicial.
 
+La salida del ETL historico se publica con staging por corrida completa: primero escribe a un archivo temporal `*.tmp` y solo reemplaza el archivo final si todos los periodos configurados terminan correctamente.
+
 ## Archivos excluidos
 
 El snapshot excluye artefactos locales, temporales y salidas pesadas:
@@ -40,12 +42,14 @@ Se consideran versionables los archivos fuente, configuracion publica y document
 - `config/config.yaml`
 - `config/config.example.yaml`
 - `etl_imss.py`
-- `audit.py`
-- `auditoria_profunda.py`
-- `filtrar_valores.py`
-- `imss_csv_profiler.py`
-- `imss_csv_profiler_export.py`
 - `imss_duckdb_exports.py`
+- `src/imss_engine/audit.py`
+- `legacy/audit/audit_pandas_legacy.py`
+- `legacy/audit/auditoria_profunda_legacy.py`
+- `legacy/audit/filtrar_valores_legacy.py`
+- `legacy/audit/imss_csv_profiler_legacy.py`
+- `legacy/audit/imss_csv_profiler_export_legacy.py`
+- `legacy/audit/validate_imss_output_experimental.py`
 - `legacy/imss_etl_legacy.py`
 - `legacy/join_manual_legacy.py`
 - `legacy/main_analysis_legacy.py`

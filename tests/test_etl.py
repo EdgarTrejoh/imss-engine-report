@@ -1,12 +1,16 @@
 import pandas as pd
 import sys
 from pathlib import Path
+import importlib
+import json
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Importing etl_imss must not trigger downloads or pipeline execution.
-from etl_imss import periodo_from_url
-from audit import normalizar_serie
+import etl_imss
+from etl_imss import get_temp_output_path, periodo_from_url
+from src.imss_engine.manifest import create_manifest_base
+from src.imss_engine.audit import normalizar_serie
 
 def test_periodo_from_url():
     """Prueba que el extractor de periodo por URL funcione correctamente"""
@@ -27,3 +31,215 @@ def test_normalizar_serie():
     assert pd.isna(resultado.iloc[3])
     assert pd.isna(resultado.iloc[4])
     assert resultado.iloc[5] == "OK"
+
+
+def test_importing_etl_imss_does_not_call_network(monkeypatch):
+    def fail_get(*args, **kwargs):
+        raise AssertionError("Importing etl_imss must not call network")
+
+    monkeypatch.setattr(etl_imss.requests, "get", fail_get)
+    importlib.reload(etl_imss)
+
+
+def test_run_urls_with_staging_replaces_final_only_after_success(tmp_path, monkeypatch):
+    final_output = tmp_path / "imss_output.csv"
+
+    def fake_procesar_url(url, first_file):
+        mode = "w" if first_file else "a"
+        header = "periodo,ta\n" if first_file else ""
+        with Path(etl_imss.OUTPUT_FILE).open(mode, encoding="utf-8") as file:
+            file.write(f"{header}{periodo_from_url(url)},1\n")
+        return True
+
+    monkeypatch.setattr(etl_imss, "procesar_url", fake_procesar_url)
+
+    etl_imss.run_urls_with_staging(
+        [
+            "http://example.local/asg-2026-01-31.csv",
+            "http://example.local/asg-2026-05-31.csv",
+        ],
+        final_output,
+    )
+
+    assert final_output.read_text(encoding="utf-8") == (
+        "periodo,ta\n"
+        "2026-01-31,1\n"
+        "2026-05-31,1\n"
+    )
+    assert not get_temp_output_path(final_output).exists()
+
+
+def test_run_urls_with_staging_keeps_existing_final_when_period_fails(tmp_path, monkeypatch):
+    final_output = tmp_path / "imss_output.csv"
+    final_output.write_text("old final\n", encoding="utf-8")
+
+    def fake_procesar_url(url, first_file):
+        with Path(etl_imss.OUTPUT_FILE).open("w", encoding="utf-8") as file:
+            file.write("partial tmp\n")
+        raise RuntimeError("simulated period failure")
+
+    monkeypatch.setattr(etl_imss, "procesar_url", fake_procesar_url)
+
+    try:
+        etl_imss.run_urls_with_staging(["http://example.local/asg-2026-01-31.csv"], final_output)
+    except RuntimeError as exc:
+        assert "simulated period failure" in str(exc)
+    else:
+        raise AssertionError("Expected staging run to fail")
+
+    assert final_output.read_text(encoding="utf-8") == "old final\n"
+    assert not get_temp_output_path(final_output).exists()
+
+
+def test_run_urls_with_staging_writes_success_manifest(tmp_path, monkeypatch):
+    final_output = tmp_path / "imss_output.csv"
+    config = tmp_path / "config.yaml"
+    manifest_dir = tmp_path / "manifests"
+    audit_base_dir = tmp_path / "audits"
+    config.write_text("etl: {}\n", encoding="utf-8")
+    manifest = create_manifest_base(
+        config_path=config,
+        output_file=final_output,
+        configured_periods=[
+            {
+                "periodo_informacion": "2026-01-31",
+                "source_url": "http://example.local/asg-2026-01-31.csv",
+            }
+        ],
+    )
+
+    def fake_procesar_url(url, first_file):
+        with Path(etl_imss.OUTPUT_FILE).open("w", encoding="utf-8") as file:
+            file.write("periodo,ta\n2026-01-31,1\n")
+        return {
+            "periodo_informacion": periodo_from_url(url),
+            "source_url": url,
+            "status": "success",
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "finished_at": "2026-01-01T00:00:01+00:00",
+            "rows_read": 1,
+            "rows_processed": 1,
+            "columns_detected": ["periodo", "ta"],
+            "error": None,
+        }
+
+    monkeypatch.setattr(etl_imss, "procesar_url", fake_procesar_url)
+
+    def fake_audit_runner(csv_path, output_dir):
+        audit_file = Path(output_dir) / "summary_general.csv"
+        audit_file.parent.mkdir(parents=True, exist_ok=True)
+        audit_file.write_text("metric,value\nfilas,1\n", encoding="utf-8")
+        return {"summary_general": audit_file}
+
+    etl_imss.run_urls_with_staging(
+        ["http://example.local/asg-2026-01-31.csv"],
+        final_output,
+        manifest=manifest,
+        manifest_output_dir=manifest_dir,
+        audit_runner=fake_audit_runner,
+        audit_base_dir=audit_base_dir,
+    )
+
+    manifest_files = list(manifest_dir.glob("manifest_*.json"))
+    assert len(manifest_files) == 1
+    loaded = json.loads(manifest_files[0].read_text(encoding="utf-8"))
+    assert loaded["status"] == "success"
+    assert loaded["output_file_hash_sha256"]
+    assert loaded["output_file_size_bytes"] == final_output.stat().st_size
+    assert loaded["periods"][0]["rows_read"] == 1
+    assert loaded["audit_status"] == "success"
+    assert loaded["audit_output_dir"] == str(audit_base_dir / loaded["run_id"])
+    assert loaded["audit_files"] == ["summary_general.csv"]
+
+
+def test_run_urls_with_staging_writes_failed_manifest_and_preserves_final(tmp_path, monkeypatch):
+    final_output = tmp_path / "imss_output.csv"
+    config = tmp_path / "config.yaml"
+    manifest_dir = tmp_path / "manifests"
+    final_output.write_text("old final\n", encoding="utf-8")
+    config.write_text("etl: {}\n", encoding="utf-8")
+    manifest = create_manifest_base(config_path=config, output_file=final_output)
+
+    def fake_procesar_url(url, first_file):
+        with Path(etl_imss.OUTPUT_FILE).open("w", encoding="utf-8") as file:
+            file.write("partial tmp\n")
+        raise RuntimeError("simulated manifest failure")
+
+    monkeypatch.setattr(etl_imss, "procesar_url", fake_procesar_url)
+
+    try:
+        etl_imss.run_urls_with_staging(
+            ["http://example.local/asg-2026-01-31.csv"],
+            final_output,
+            manifest=manifest,
+            manifest_output_dir=manifest_dir,
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("Expected staging run to fail")
+
+    manifest_files = list(manifest_dir.glob("manifest_*.json"))
+    assert len(manifest_files) == 1
+    loaded = json.loads(manifest_files[0].read_text(encoding="utf-8"))
+    assert loaded["status"] == "failed"
+    assert "simulated manifest failure" in loaded["error"]
+    assert loaded["periods"][0]["status"] == "failed"
+    assert loaded["output_file_hash_sha256"] is None
+    assert loaded["output_file_size_bytes"] is None
+    assert loaded["audit_status"] == "not_run"
+    assert final_output.read_text(encoding="utf-8") == "old final\n"
+
+
+def test_run_urls_with_staging_writes_failed_manifest_when_audit_fails(tmp_path, monkeypatch):
+    final_output = tmp_path / "imss_output.csv"
+    config = tmp_path / "config.yaml"
+    manifest_dir = tmp_path / "manifests"
+    audit_base_dir = tmp_path / "audits"
+    config.write_text("etl: {}\n", encoding="utf-8")
+    manifest = create_manifest_base(config_path=config, output_file=final_output)
+
+    def fake_procesar_url(url, first_file):
+        with Path(etl_imss.OUTPUT_FILE).open("w", encoding="utf-8") as file:
+            file.write("periodo,ta\n2026-01-31,1\n")
+        return {
+            "periodo_informacion": periodo_from_url(url),
+            "source_url": url,
+            "status": "success",
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "finished_at": "2026-01-01T00:00:01+00:00",
+            "rows_read": 1,
+            "rows_processed": 1,
+            "columns_detected": ["periodo", "ta"],
+            "error": None,
+        }
+
+    def fake_audit_runner(csv_path, output_dir):
+        raise RuntimeError("simulated audit failure")
+
+    monkeypatch.setattr(etl_imss, "procesar_url", fake_procesar_url)
+
+    try:
+        etl_imss.run_urls_with_staging(
+            ["http://example.local/asg-2026-01-31.csv"],
+            final_output,
+            manifest=manifest,
+            manifest_output_dir=manifest_dir,
+            audit_runner=fake_audit_runner,
+            audit_base_dir=audit_base_dir,
+        )
+    except RuntimeError as exc:
+        assert "simulated audit failure" in str(exc)
+    else:
+        raise AssertionError("Expected audit failure to propagate")
+
+    manifest_files = list(manifest_dir.glob("manifest_*.json"))
+    assert len(manifest_files) == 1
+    loaded = json.loads(manifest_files[0].read_text(encoding="utf-8"))
+    assert final_output.exists()
+    assert loaded["status"] == "failed"
+    assert loaded["audit_status"] == "failed"
+    assert loaded["audit_output_dir"] == str(audit_base_dir / loaded["run_id"])
+    assert "simulated audit failure" in loaded["audit_error"]
+    assert loaded["output_file_hash_sha256"]
+    assert loaded["output_file_size_bytes"] == final_output.stat().st_size
