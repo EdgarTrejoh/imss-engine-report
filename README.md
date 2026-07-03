@@ -1,116 +1,138 @@
 # IMSS Engine Report
 
-Pipeline local en Python para descargar, procesar, auditar y analizar datos abiertos del IMSS. El objetivo futuro es convertir este repositorio en un motor de datos laborales, salariales y sectoriales para reportes economicos de Mexico.
+Motor local en Python para descargar, transformar, agregar, auditar y trazar datos abiertos del IMSS. El repositorio esta en estabilizacion tecnica: no es todavia una API, dashboard ni producto final.
 
-## Estado actual
+## Estado Actual
 
-El proyecto esta en Fase 2: **ETL funcional local / prototipo tecnico avanzado**.
+- ETL principal: `etl_imss.py`.
+- Modulos testeables: `src/imss_engine/`.
+- Auditoria oficial DuckDB: `imss_duckdb_exports.py`.
+- Manifest de corrida: `src/imss_engine/manifest.py`.
+- Wrappers operativos: `scripts/`.
+- Codigo historico o exploratorio: `legacy/`.
+- Pruebas locales y CI ligero: `tests/` y `.github/workflows/tests.yml`.
 
-El ETL historico real sigue en `etl_imss.py`, pero la normalizacion, transformacion, metricas y agregacion ya tienen funciones testeables en `src/imss_engine/`. `main.py`, `imss_etl.py`, `join.py` y `viz.py` fueron separados como codigo legacy o exploratorio.
+No existen todavia PostgreSQL, API, dashboard, Docker, acumulacion historica controlada, `full_refresh`, `upsert_period` ni carga a base de datos.
 
-No hay PostgreSQL, API, dashboard, Docker ni CI/CD en esta etapa.
+## Setup Limpio
 
-## Reglas de negocio estabilizadas
+Windows PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+python -m pytest
+```
+
+Linux/macOS:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+python -m pytest
+```
+
+Python recomendado: 3.11.
+
+## Comandos Vigentes
+
+Pruebas:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+```
+
+Auditoria manual DuckDB:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_audit.py .\ruta\archivo.csv --output-dir .\reports\audits\audit_manual
+```
+
+Revision Git:
+
+```powershell
+git status --short
+git diff --check
+```
+
+ETL local, solo cuando se quiera descargar/procesar datos reales:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_etl.py
+```
+
+No ejecutes el ETL dentro de pruebas unitarias.
+
+## Reglas De Negocio Fase 2
 
 - La base IMSS se trata como cubo agregado, no como base individual.
 - `asegurados`, `no_trabajadores` y `ta` se conservan como metricas distintas.
-- `sector_economico_3` no existe en el layout implementado; se preservan `sector_economico_1`, `sector_economico_2` y `sector_economico_4`.
+- `sector_economico_3` no se crea; se preservan `sector_economico_1`, `sector_economico_2` y `sector_economico_4`.
 - `ptpd` se conserva cuando existe y queda nulo cuando no existe historicamente.
 - VSM y UMA se separan en `rango_ingreso_vsm` y `rango_ingreso_uma`.
 - El SBC se calcula con denominadores `*_sal`, no con `ta`.
 - `timestamp` es metadato de corrida, no llave analitica.
 - `NA`, `ND` y nulos no son errores automaticos.
 
-## Estructura
+## Salida, Auditoria Y Manifest
+
+`etl_imss.py` publica la salida final con staging por corrida completa: escribe primero a un archivo temporal y reemplaza el CSV final con `os.replace()` solo si todos los periodos terminan correctamente.
+
+Despues de publicar el archivo final, el ETL ejecuta la auditoria DuckDB sobre ese archivo. La auditoria integrada usa:
 
 ```text
-config/              Configuracion local y ejemplo publico
-src/imss_engine/     Paquete base para la futura modularizacion
-scripts/             Wrappers operativos minimos
-tests/               Pruebas unitarias y fixtures
-docs/                Notas tecnicas y documentacion inicial
-legacy/              Scripts historicos o exploratorios
-notebooks/           Notebooks de revision
-data/                Datos locales no versionados
-reports/             Auditorias, perfiles, manifests y figuras generadas
-logs/                Logs locales no versionados
+reports/audits/<run_id>/
 ```
 
-## Uso local
+El manifest se guarda como:
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\activate
-python -m pip install -r requirements.txt
+```text
+reports/manifests/manifest_<run_id>.json
 ```
 
-El ETL historico se ejecuta explicitamente con:
+El manifest registra config usada, hash de config, periodos/URLs, archivo final, hash del archivo final, auditoria generada, estado de auditoria y errores.
 
-```powershell
-python etl_imss.py
-```
+La auditoria manual puede sobrescribir outputs si se usa el mismo `--output-dir`. La auditoria integrada al ETL usa un directorio por `run_id` para conservar evidencia trazable de la corrida.
 
-Tambien existe un wrapper:
+## Artefactos No Versionados
 
-```powershell
-python scripts/run_etl.py
-```
+No se versionan datos pesados ni salidas generadas:
 
-Importar `etl_imss.py` no debe iniciar descargas. Las descargas solo deben ocurrir al ejecutar el entrypoint.
+- `data/raw/`
+- `data/interim/`
+- `data/processed/`
+- `reports/audits/`
+- `reports/manifests/`
+- `reports/profiles/`
+- `reports/figures/`
+- `logs/`
+- `temp_*.csv`
+- `*.tmp`
+- `imss_analisis_profundo*.csv`
+- `*.parquet`
+- `*.xlsx`
 
-`etl_imss.py` genera la salida final con staging por corrida: escribe primero en un archivo temporal `*.tmp` y solo reemplaza el CSV final si todos los periodos terminan correctamente. Si la corrida falla, el archivo final anterior no se reemplaza y el temporal se limpia.
+Se conservan `.gitkeep` donde aplica para mantener la estructura.
 
-La idempotencia actual es a nivel corrida completa. El upsert incremental por periodo queda fuera de esta fase.
+## GitHub Actions
 
-## Manifiesto de corrida
+El workflow `Tests` ejecuta en `ubuntu-latest` con Python 3.11:
 
-Cada corrida del ETL genera un manifiesto tecnico JSON en `reports/manifests/` con formato `manifest_<run_id>.json`.
+1. Checkout.
+2. Setup Python.
+3. Instalacion de `requirements.txt`.
+4. `python -m pytest`.
 
-El manifiesto registra evidencia local de linaje: `run_id`, inicio y fin de corrida, estado `success` o `failed`, ruta y hash de configuracion, archivo de salida, hash y tamano del archivo final, periodos configurados, resultado por periodo, URL fuente, columnas detectadas, filas leidas/procesadas cuando estan disponibles y errores si ocurren.
+No ejecuta `etl_imss.py`, no descarga datos reales, no llama al portal IMSS, no corre auditorias sobre CSV grande y no carga datos a ninguna base.
 
-Despues de publicar el archivo final, el ETL ejecuta la auditoria DuckDB sobre ese archivo y guarda sus resultados en `reports/audits/<run_id>/`. El manifiesto registra `audit_output_dir`, `audit_status`, `audit_files` y `audit_error`.
+## Documentacion
 
-Si la auditoria falla despues de publicar el CSV final, el archivo final se conserva, pero el manifiesto queda con `status: failed` y `audit_status: failed`; esa corrida no queda certificada.
-
-El manifiesto garantiza trazabilidad tecnica de corrida, archivo final publicado, hash, periodos y fallas. No implementa acumulacion historica, upsert incremental por periodo, recuperacion parcial ni carga a base de datos.
-
-## Pruebas
-
-Las pruebas usan fixtures pequenos en `tests/fixtures/` y no deben llamar red ni descargar archivos reales.
-
-```powershell
-python -m pytest
-```
-
-## Auditoria DuckDB
-
-La herramienta oficial de auditoria/validacion de salida para Fase 2 es `imss_duckdb_exports.py`, ejecutada mediante el wrapper operativo:
-
-```powershell
-python scripts/run_audit.py <archivo_csv>
-```
-
-La auditoria exporta reportes pequenos a `reports/audits/` y valida layout, columnas faltantes, ausencia de `sector_economico_3`, resumen general y por periodo, composicion de puestos, masa salarial, SBC con denominador `ta_sal`, duplicados por llave analitica Fase 2 y distribucion de `ptpd`.
-
-Cuando se ejecuta manualmente, puede usarse un directorio reemplazable:
-
-```powershell
-python scripts/run_audit.py <archivo_csv> --output-dir reports/audits/audit_2026_05
-```
-
-Cuando se ejecuta integrada al ETL, la auditoria usa `reports/audits/<run_id>/` para dejar evidencia trazable de esa corrida.
-
-No se recomienda abrir CSV grandes en Excel. Para revisar salidas grandes usa DuckDB, Polars, pandas por chunks o los reportes exportados en `reports/audits/`.
-
-## Datos y artefactos
-
-Los datos pesados, temporales y salidas generadas no se versionan. Esto incluye `data/raw/`, `data/interim/`, `data/processed/`, `logs/`, CSV grandes, Parquet, bases locales y reportes generados.
-
-## Riesgos conocidos
-
-Ver:
-
-- `docs/known_issues.md`
+- `docs/business_rules_imss.md`
 - `docs/data_dictionary.md`
 - `docs/restructure_notes.md`
-- `docs/business_rules_imss.md`
+- `docs/known_issues.md`
+- `docs/plan_trabajo.md`

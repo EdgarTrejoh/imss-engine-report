@@ -1,3 +1,5 @@
+# Example local configuration for the IMSS ETL.
+# This file is safe to version: it contains no credentials and no local paths.
 etl:
   base_url: "http://datos.imss.gob.mx/sites/default/files/asg-{}.csv"
   chunk_size: 400000

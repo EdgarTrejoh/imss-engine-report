@@ -7,6 +7,7 @@ __pycache__/
 # Archivos temporales y salidas pesadas del ETL
 temp_*.csv
 imss_analisis_profundo*.csv
+*.tmp
 *.parquet
 *.xlsx
 

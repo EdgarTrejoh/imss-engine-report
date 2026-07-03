@@ -1,18 +1,40 @@
-# GitHub Ready - Snapshot tecnico
+# GitHub Ready - Snapshot Tecnico
 
-## Descripcion del proyecto
+## Descripcion Del Proyecto
 
-Este proyecto contiene un pipeline ETL local para descargar, transformar, agregar, auditar y visualizar datos abiertos del IMSS. El flujo principal procesa archivos CSV grandes por bloques, normaliza diferencias historicas de layout y genera un consolidado analitico por periodo, entidad, sexo, rango de edad, rango UMA y sector economico.
+`imss-engine-report` es un motor local en Python para procesar, auditar y trazar datos abiertos del IMSS. El proyecto esta en estabilizacion tecnica, no es todavia una API, dashboard ni producto final.
 
-## Estado actual
+## Estado Actual
 
-Estado clasificado: **ETL funcional local / prototipo tecnico avanzado**.
+- ETL principal: `etl_imss.py`.
+- Paquete modular: `src/imss_engine/`.
+- Auditoria oficial DuckDB: `imss_duckdb_exports.py`.
+- Manifest de corrida: `src/imss_engine/manifest.py`.
+- Wrappers operativos: `scripts/`.
+- Historico/exploratorio: `legacy/`.
+- CI ligero: `.github/workflows/tests.yml`.
 
-El nucleo del procesamiento historico esta implementado en `etl_imss.py` y usa `config/config.yaml` para construir las URLs, definir los periodos a procesar, el tamano de chunk y el archivo de salida. Existen scripts auxiliares para auditoria, perfilado y exportaciones con DuckDB. El proyecto esta en reestructura inicial.
+No existen todavia PostgreSQL, API, dashboard, Docker, acumulacion historica controlada, `full_refresh`, `upsert_period` ni carga a base de datos.
 
-La salida del ETL historico se publica con staging por corrida completa: primero escribe a un archivo temporal `*.tmp` y solo reemplaza el archivo final si todos los periodos configurados terminan correctamente.
+## Salidas Y Trazabilidad
 
-## Archivos excluidos
+El ETL publica la salida final con staging por corrida completa y replace atomico. Si la corrida falla antes de publicar, el archivo final anterior se conserva.
+
+Cuando una corrida publica el archivo final, ejecuta auditoria DuckDB integrada en:
+
+```text
+reports/audits/<run_id>/
+```
+
+El manifest queda en:
+
+```text
+reports/manifests/manifest_<run_id>.json
+```
+
+La auditoria manual puede usar cualquier `--output-dir`; si se reutiliza el mismo directorio, sus archivos pueden sobrescribirse.
+
+## Archivos Excluidos
 
 El snapshot excluye artefactos locales, temporales y salidas pesadas:
 
@@ -21,84 +43,80 @@ El snapshot excluye artefactos locales, temporales y salidas pesadas:
 - `.pytest_cache/`
 - `temp_*.csv`
 - `imss_analisis_profundo*.csv`
+- `*.tmp`
 - `*.parquet`
 - `*.xlsx`
-- `data/raw/`
-- `data/interim/`
-- `data/processed/`
-- `logs/`
-- archivos CSV generados por auditoria, perfilado y exportaciones
+- `data/raw/*`
+- `data/interim/*`
+- `data/processed/*`
+- `reports/audits/*`
+- `reports/manifests/*`
+- `reports/profiles/*`
+- `reports/figures/*`
+- `logs/*`
 - `.ipynb_checkpoints/`
 - `*.log`
 
-## Archivos versionables
+Se conservan `.gitkeep` en carpetas de estructura.
 
-Se consideran versionables los archivos fuente, configuracion publica y documentacion:
+## Archivos Versionables Principales
 
 - `README.md`
 - `GITHUB_READY.md`
 - `.gitignore`
+- `.gitattributes`
 - `requirements.txt`
+- `pyproject.toml`
+- `.github/workflows/tests.yml`
 - `config/config.yaml`
 - `config/config.example.yaml`
 - `etl_imss.py`
 - `imss_duckdb_exports.py`
-- `src/imss_engine/audit.py`
-- `legacy/audit/audit_pandas_legacy.py`
-- `legacy/audit/auditoria_profunda_legacy.py`
-- `legacy/audit/filtrar_valores_legacy.py`
-- `legacy/audit/imss_csv_profiler_legacy.py`
-- `legacy/audit/imss_csv_profiler_export_legacy.py`
-- `legacy/audit/validate_imss_output_experimental.py`
-- `legacy/imss_etl_legacy.py`
-- `legacy/join_manual_legacy.py`
-- `legacy/main_analysis_legacy.py`
-- `legacy/viz_exploratory_legacy.py`
-- `notebooks/review.ipynb`
 - `src/imss_engine/`
 - `scripts/`
 - `docs/`
-- `tests/test_etl.py`
+- `tests/`
+- `legacy/`
+- `notebooks/review.ipynb`
 
-## Revision de config/config.yaml
+## Revision De Configuracion
 
-`config/config.yaml` no contiene credenciales, tokens, usuarios, contrasenas ni rutas privadas sensibles. Contiene una URL publica del IMSS, parametros de ejecucion y lista de meses. Por lo tanto, se deja como archivo versionable.
+`config/config.yaml` no contiene credenciales, tokens, usuarios ni contrasenas. Contiene URL publica del IMSS, parametros de ejecucion y lista de meses. `config/config.example.yaml` es el ejemplo seguro para entornos limpios.
 
-## Advertencias conocidas
+## Comandos Recomendados
 
-- `etl_imss.py` ya tiene guardia `if __name__ == "__main__"`, pero no se debe remover porque evita descargas al importar funciones.
-- `legacy/main_analysis_legacy.py`, `legacy/viz_exploratory_legacy.py` y `legacy/join_manual_legacy.py` contienen nombres de archivo o rutas hardcodeadas.
-- El proyecto depende de disponibilidad de red y del portal de datos del IMSS para ejecutar el ETL.
-- Las dependencias en `requirements.txt` no estan fijadas por version.
-- El entorno virtual local `.venv/` no debe subirse a GitHub.
-- Los CSV consolidados y temporales son artefactos generados y no deben versionarse.
-
-## Comando sugerido para ejecutar el ETL
-
-Despues de crear y activar un entorno virtual e instalar dependencias:
-
-```powershell
-python etl_imss.py
-```
-
-Comandos sugeridos de preparacion local:
+Setup local:
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\activate
-python -m pip install -r requirements.txt
-python etl_imss.py
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-## Comandos sugeridos para inicializar Git
-
-Si el repositorio aun no esta inicializado correctamente:
+Validacion:
 
 ```powershell
-git init
-git status
-git add .gitignore GITHUB_READY.md README.md requirements.txt config/ src/ scripts/ docs/ legacy/ notebooks/ tests/ pyproject.toml *.py
-git status
+.\.venv\Scripts\python.exe -m pytest
+git status --short
+git diff --check
 ```
 
-No hacer commit hasta revisar el `git status` y confirmar el conjunto final de archivos.
+Auditoria manual:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_audit.py .\ruta\archivo.csv --output-dir .\reports\audits\audit_manual
+```
+
+ETL local, solo si se quiere descargar/procesar datos reales:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_etl.py
+```
+
+## Advertencias
+
+- No ejecutar el ETL como parte de tests.
+- Las pruebas deben seguir usando fixtures pequenos y sin red.
+- Los CSV consolidados, auditorias, manifests y temporales son artefactos generados y no deben versionarse.
+- Las dependencias se mantienen minimas para entorno limpio y CI ligero.
