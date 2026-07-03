@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import pandas as pd
 
-def run_audit() -> None:
-    """Placeholder for future audit orchestration."""
-    raise NotImplementedError("Audit layer is not migrated yet.")
+
+def normalizar_serie(serie: pd.Series) -> pd.Series:
+    """Normalize text values for audit comparisons."""
+    return (
+        serie.astype("string")
+        .str.strip()
+        .str.upper()
+        .replace({"": pd.NA, "NAN": pd.NA, "NONE": pd.NA})
+    )
