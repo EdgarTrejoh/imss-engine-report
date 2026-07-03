@@ -7,7 +7,8 @@
 - Dependency versions in `requirements.txt` are not pinned.
 - Some legacy/exploratory scripts may contain hardcoded local paths or assumptions.
 - `main.py`, legacy visualizations and notebook analyses are outside the Phase 2 stabilization scope.
-- PostgreSQL, API, dashboard, Docker and CI/CD are intentionally not implemented in this phase.
+- PostgreSQL, API, dashboard, Docker and advanced CI/CD are intentionally not implemented in this phase.
+- GitHub Actions currently provides only lightweight test validation with fixtures and no network-dependent ETL execution.
 - Official catalog joins for sector, entity, sex, age and income ranges are pending until local documented catalog files are available.
 - The DuckDB audit validates generated CSV structure and arithmetic consistency, but validation against official IMSS bulletins remains an external control and does not replace methodology validation.
 - Full-run output idempotency is implemented with staging and atomic replace. Incremental upsert by period is still pending.

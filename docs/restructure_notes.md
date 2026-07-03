@@ -71,6 +71,14 @@ On ETL failure before publishing, the manifest is written with status `failed` a
 
 The manifest is intentionally local and file-based. Historical accumulation, period-level upsert, partial recovery and database loading remain out of scope.
 
+## Environment And CI
+
+The supported development runtime is Python 3.11. `requirements.txt` is intentionally minimal and contains only dependencies needed by the local engine, DuckDB audit and tests.
+
+The repository includes a lightweight GitHub Actions workflow at `.github/workflows/tests.yml`. It runs `python -m pytest` on pushes and pull requests targeting `main`.
+
+The workflow does not execute `etl_imss.py`, does not download IMSS files, does not run audits over large local CSV files and does not load data into any database.
+
 ## Out of Scope
 
-PostgreSQL, API, dashboard, Docker, GitHub Actions, cloud deployment and full ETL execution remain out of scope.
+PostgreSQL, API, dashboard, Docker, advanced CI/CD, cloud deployment, full-refresh orchestration, period-level upsert and full ETL execution in CI remain out of scope.
