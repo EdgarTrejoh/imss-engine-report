@@ -14,7 +14,7 @@
 - Historico/exploratorio: `legacy/`.
 - CI ligero: `.github/workflows/tests.yml`.
 
-No existen todavia PostgreSQL, API, dashboard, Docker, acumulacion historica controlada, `full_refresh`, `upsert_period` ni carga a base de datos.
+No existen todavia PostgreSQL, BigQuery, API, dashboard, Docker, scheduler, `full_refresh`, `upsert_period` ni carga cloud automatizada.
 
 ## Salidas Y Trazabilidad
 
@@ -33,6 +33,18 @@ reports/manifests/manifest_<run_id>.json
 ```
 
 La auditoria manual puede usar cualquier `--output-dir`; si se reutiliza el mismo directorio, sus archivos pueden sobrescribirse.
+
+## Concentrado Insert-Only
+
+El concentrado oficial local es:
+
+```text
+data/processed/imss_concentrado.csv
+```
+
+Los modos soportados son `mes_consulta` y `periodo_consulta`. Ambos cargan solo periodos nuevos y detectan duplicados/conflictos por `periodo_informacion`, row count y `period_fingerprint_hash`.
+
+La fase no implementa `full_refresh`, `upsert_period` ni sobrescritura de periodos existentes.
 
 ## Archivos Excluidos
 

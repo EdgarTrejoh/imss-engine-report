@@ -12,7 +12,7 @@ Motor local en Python para descargar, transformar, agregar, auditar y trazar dat
 - Codigo historico o exploratorio: `legacy/`.
 - Pruebas locales y CI ligero: `tests/` y `.github/workflows/tests.yml`.
 
-No existen todavia PostgreSQL, API, dashboard, Docker, acumulacion historica controlada, `full_refresh`, `upsert_period` ni carga a base de datos.
+No existen todavia PostgreSQL, BigQuery, API, dashboard, Docker, scheduler, `full_refresh`, `upsert_period` ni carga cloud automatizada.
 
 ## Setup Limpio
 
@@ -97,6 +97,54 @@ reports/manifests/manifest_<run_id>.json
 El manifest registra config usada, hash de config, periodos/URLs, archivo final, hash del archivo final, auditoria generada, estado de auditoria y errores.
 
 La auditoria manual puede sobrescribir outputs si se usa el mismo `--output-dir`. La auditoria integrada al ETL usa un directorio por `run_id` para conservar evidencia trazable de la corrida.
+
+## Concentrado Insert-Only
+
+La fase actual agrega consolidacion historica local insert-only hacia:
+
+```text
+data/processed/imss_concentrado.csv
+```
+
+Modos soportados en `config/config.yaml`:
+
+- `mes_consulta`: procesa un solo mes declarado en `etl.mes_consulta`.
+- `periodo_consulta`: procesa la lista explicita `etl.periodo_consulta.meses` en el orden declarado.
+
+Cuando `etl.mode` esta activo, `etl.meses` es legacy y debe quedar vacio (`meses: []`). Si `etl.meses` trae valores, el ETL falla con error claro para evitar procesar un periodo distinto al esperado.
+
+Ejemplo `periodo_consulta`:
+
+```yaml
+etl:
+  base_url: "http://datos.imss.gob.mx/sites/default/files/asg-{}.csv"
+  chunk_size: 400000
+  mode: "periodo_consulta"
+  mes_consulta: "YYYY-MM-DD"  # ignorado en periodo_consulta
+  periodo_consulta:
+    meses:
+      - "2016-01-31"
+      - "2016-02-29"
+      - "2016-03-31"
+  output_file: "imss_analisis_profundo.csv"
+  concentrado_file: "data/processed/imss_concentrado.csv"
+  meses: []
+```
+
+No se calculan rangos automaticos, no se usan campos `desde`/`hasta` y no se sobrescriben periodos existentes.
+
+Reglas insert-only por `periodo_informacion`:
+
+- Periodo nuevo: `success_loaded`.
+- Mismo periodo, mismo numero de filas y mismo hash ligero: `already_exists`.
+- Mismo periodo, distinto numero de filas: `conflict_existing_period_row_count`.
+- Mismo periodo, mismas filas y hash distinto: `conflict_existing_period_hash`.
+
+El hash ligero `period_fingerprint_hash` resume el periodo con conteo de filas, sumas principales y cantidad de llaves analiticas distintas. Sirve para detectar cambios funcionales sin hacer auditoria forense del archivo completo.
+
+Antes de insertar, cada periodo pasa por auditoria ligera: columnas requeridas, periodo correcto, ausencia de `sector_economico_3`, presencia de VSM/UMA y `ptpd`, duplicados por llave analitica Fase 2, SBC infinito y dataframe no vacio.
+
+Esta fase no implementa `full_refresh`, `upsert_period`, sobrescritura de periodos existentes ni acumulacion en base de datos.
 
 ## Artefactos No Versionados
 

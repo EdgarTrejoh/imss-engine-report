@@ -15,12 +15,17 @@ La auditoria oficial esta en `imss_duckdb_exports.py`. El manifest de corrida es
 - Integracion ETL -> archivo final -> auditoria DuckDB -> manifest.
 - Pruebas locales con fixtures pequenos.
 - GitHub Actions ligero para ejecutar `pytest` sin datos reales.
+- Consolidacion insert-only hacia `data/processed/imss_concentrado.csv`.
+- Modos `mes_consulta` y `periodo_consulta`.
+- Hash ligero `period_fingerprint_hash`.
+- Auditoria ligera por periodo antes de insertar.
 
 ## Operativo Actual
 
 - Ejecutar tests: `python -m pytest`.
 - Ejecutar auditoria manual: `python scripts/run_audit.py <archivo_csv> --output-dir reports/audits/audit_manual`.
 - Ejecutar ETL local: `python scripts/run_etl.py`.
+- Configurar `etl.mode` como `mes_consulta` o `periodo_consulta` antes de ejecutar ETL real.
 
 ## Fuera De Alcance Actual
 

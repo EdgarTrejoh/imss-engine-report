@@ -17,3 +17,4 @@
 - Two additional periods should be validated before treating the Phase 2 workflow as broadly stable.
 - `ptpd` still needs historical review for periods where the source column does not appear.
 - Do not open large generated CSV files in Excel; use DuckDB-based audit outputs or analytical tools built for large files.
+- The concentrado is insert-only. There is no approved overwrite, `full_refresh` or `upsert_period` behavior yet.

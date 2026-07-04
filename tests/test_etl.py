@@ -8,9 +8,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Importing etl_imss must not trigger downloads or pipeline execution.
 import etl_imss
-from etl_imss import get_temp_output_path, periodo_from_url
+from etl_imss import get_temp_output_path, periodo_from_url, run_concentrado_workflow
 from src.imss_engine.manifest import create_manifest_base
 from src.imss_engine.audit import normalizar_serie
+from src.imss_engine.aggregate import aggregate_imss_chunk
 
 def test_periodo_from_url():
     """Prueba que el extractor de periodo por URL funcione correctamente"""
@@ -243,3 +244,69 @@ def test_run_urls_with_staging_writes_failed_manifest_when_audit_fails(tmp_path,
     assert "simulated audit failure" in loaded["audit_error"]
     assert loaded["output_file_hash_sha256"]
     assert loaded["output_file_size_bytes"] == final_output.stat().st_size
+
+
+def test_periodo_consulta_continues_after_one_period_failure(tmp_path, load_fixture):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("etl: {}\n", encoding="utf-8")
+    concentrado = tmp_path / "imss_concentrado.csv"
+    manifest_dir = tmp_path / "manifests"
+    etl_config = {
+        "base_url": "http://example.local/asg-{}.csv",
+        "mode": "periodo_consulta",
+        "periodo_consulta": {"meses": ["2026-01-31", "2026-02-28"]},
+        "concentrado_file": str(concentrado),
+    }
+
+    def fake_processor(url):
+        period = periodo_from_url(url)
+        if period == "2026-02-28":
+            raise RuntimeError("simulated processing failure")
+        df = load_fixture("imss_sample_actual.csv")
+        df["periodo_informacion"] = period
+        return aggregate_imss_chunk(df)
+
+    manifest = run_concentrado_workflow(
+        etl_config,
+        config_path,
+        process_period_func=fake_processor,
+        manifest_output_dir=manifest_dir,
+    )
+
+    assert manifest["status"] == "completed_with_warnings"
+    assert manifest["periods_loaded"] == ["2026-01-31"]
+    assert manifest["periods_failed"] == ["2026-02-28"]
+    assert concentrado.exists()
+    assert list(manifest_dir.glob("manifest_*.json"))
+
+
+def test_mes_consulta_workflow_processes_only_configured_month(tmp_path, load_fixture):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("etl: {}\n", encoding="utf-8")
+    concentrado = tmp_path / "imss_concentrado.csv"
+    etl_config = {
+        "base_url": "http://example.local/asg-{}.csv",
+        "mode": "mes_consulta",
+        "mes_consulta": "2026-05-31",
+        "concentrado_file": str(concentrado),
+    }
+    seen_urls = []
+
+    def fake_processor(url):
+        seen_urls.append(url)
+        period = periodo_from_url(url)
+        df = load_fixture("imss_sample_actual.csv")
+        df["periodo_informacion"] = period
+        return aggregate_imss_chunk(df)
+
+    manifest = run_concentrado_workflow(
+        etl_config,
+        config_path,
+        process_period_func=fake_processor,
+        manifest_output_dir=tmp_path / "manifests",
+    )
+
+    assert seen_urls == ["http://example.local/asg-2026-05-31.csv"]
+    assert manifest["run_mode"] == "mes_consulta"
+    assert manifest["periods_loaded"] == ["2026-05-31"]
+    assert concentrado.exists()

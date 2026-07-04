@@ -3,6 +3,19 @@
 etl:
   base_url: "http://datos.imss.gob.mx/sites/default/files/asg-{}.csv"
   chunk_size: 400000
+
+  # New insert-only concentrado modes:
+  # - mes_consulta: process one explicit period.
+  # - periodo_consulta: process the explicit list in the declared order.
+  mode: "mes_consulta"
+  mes_consulta: "YYYY-MM-DD"
+  periodo_consulta:
+    meses:
+      - "YYYY-MM-DD"
+
   output_file: "data/processed/imss_analisis_profundo.csv"
-  meses:
-    - "YYYY-MM-DD"
+  concentrado_file: "data/processed/imss_concentrado.csv"
+
+  # Legacy compatibility only.
+  # Must be empty when mode is mes_consulta or periodo_consulta.
+  meses: []

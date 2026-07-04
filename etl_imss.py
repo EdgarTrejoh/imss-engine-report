@@ -15,6 +15,13 @@ from src.imss_engine.aggregate import (
     aggregate_imss_chunk,
     get_group_columns,
 )
+from src.imss_engine.concentrado import (
+    PeriodResult,
+    build_period_urls,
+    make_candidate,
+    publish_concentrado_insert_only,
+    resolve_configured_periods,
+)
 from src.imss_engine.metrics import add_validation_differences, calculate_sbc_metrics
 from src.imss_engine.manifest import (
     add_period_result,
@@ -187,8 +194,8 @@ def run_urls_with_staging(
         raise
 
 
-def procesar_url(url, first_file):
-    if OUTPUT_FILE is None or CHUNK_SIZE is None:
+def process_url_to_dataframe(url):
+    if CHUNK_SIZE is None:
         raise RuntimeError("Config no cargada. Ejecuta main() antes de procesar URLs.")
 
     periodo = periodo_from_url(url)
@@ -236,13 +243,10 @@ def procesar_url(url, first_file):
 
         agg_global["fuente"] = "IMSS"
         agg_global["timestamp"] = timestamp
-        mode = "w" if first_file else "a"
-        agg_global.to_csv(OUTPUT_FILE, mode=mode, header=first_file, index=False, encoding="utf-8-sig")
 
         logging.info(f"{periodo} finalizado. Eliminando temporal...")
         os.remove(temp_file)
-        time.sleep(3)
-        return {
+        metadata = {
             "periodo_informacion": periodo,
             "source_url": url,
             "status": "success",
@@ -253,12 +257,138 @@ def procesar_url(url, first_file):
             "columns_detected": columns_detected,
             "error": None,
         }
+        return agg_global, metadata
 
     except Exception as e:
         logging.error(f"Error en {periodo}: {e}")
         if os.path.exists(temp_file):
             os.remove(temp_file)
         raise
+
+
+def procesar_url(url, first_file):
+    if OUTPUT_FILE is None or CHUNK_SIZE is None:
+        raise RuntimeError("Config no cargada. Ejecuta main() antes de procesar URLs.")
+
+    agg_global, metadata = process_url_to_dataframe(url)
+    mode = "w" if first_file else "a"
+    agg_global.to_csv(OUTPUT_FILE, mode=mode, header=first_file, index=False, encoding="utf-8-sig")
+    time.sleep(3)
+    return metadata
+
+
+def _manifest_summary_from_results(results, summary):
+    manifest_summary = dict(summary)
+    manifest_summary["periods_loaded"] = [
+        result.periodo_informacion for result in results if result.status == "success_loaded"
+    ]
+    manifest_summary["periods_existing"] = [
+        result.periodo_informacion for result in results if result.status == "already_exists"
+    ]
+    manifest_summary["periods_conflict"] = [
+        result.periodo_informacion
+        for result in results
+        if result.status in {"conflict_existing_period_row_count", "conflict_existing_period_hash"}
+    ]
+    manifest_summary["periods_failed"] = [
+        result.periodo_informacion for result in results if result.status.startswith("failed_")
+    ]
+    manifest_summary["rows_loaded"] = sum(result.rows_loaded for result in results)
+    manifest_summary["rows_not_loaded"] = sum(
+        (result.rows_processed or 0) - result.rows_loaded for result in results
+    )
+    manifest_summary["period_results"] = [result.to_manifest() for result in results]
+    return manifest_summary
+
+
+def run_concentrado_workflow(
+    etl_config,
+    config_path,
+    *,
+    process_period_func=None,
+    manifest_output_dir="reports/manifests",
+):
+    mode, periods = resolve_configured_periods(etl_config)
+    period_urls = build_period_urls(etl_config["base_url"], periods)
+    concentrado_file = Path(etl_config.get("concentrado_file", "data/processed/imss_concentrado.csv"))
+    manifest = create_manifest_base(
+        config_path=config_path,
+        output_file=concentrado_file,
+        configured_periods=[
+            {"periodo_informacion": period, "source_url": url}
+            for period, url in period_urls
+        ],
+    )
+    manifest.update(
+        {
+            "run_mode": mode,
+            "concentrado_file": str(concentrado_file),
+            "periods_requested": periods,
+            "periods_loaded": [],
+            "periods_existing": [],
+            "periods_conflict": [],
+            "periods_failed": [],
+            "rows_loaded": 0,
+            "rows_not_loaded": 0,
+            "period_results": [],
+        }
+    )
+
+    candidates = []
+    failed_results = []
+    processor = process_period_func or process_url_to_dataframe
+
+    for period, url in period_urls:
+        try:
+            processed = processor(url)
+            if isinstance(processed, tuple):
+                period_df = processed[0]
+            else:
+                period_df = processed
+            candidates.append(make_candidate(period_df, period, url))
+        except requests.RequestException as error:
+            failed_results.append(
+                PeriodResult(
+                    periodo_informacion=period,
+                    source_url=url,
+                    status="failed_download",
+                    error=str(error),
+                    audit_status="skipped",
+                )
+            )
+        except Exception as error:
+            failed_results.append(
+                PeriodResult(
+                    periodo_informacion=period,
+                    source_url=url,
+                    status="failed_processing",
+                    error=str(error),
+                    audit_status="skipped",
+                )
+            )
+
+    try:
+        publish_results, summary = publish_concentrado_insert_only(concentrado_file, candidates)
+    except Exception as error:
+        finalize_manifest_failure(manifest, error)
+        write_manifest(manifest, manifest_output_dir)
+        raise
+
+    all_results = [*publish_results, *failed_results]
+    summary = _manifest_summary_from_results(all_results, summary)
+    if failed_results and summary["status"] in {"success", "success_no_changes"}:
+        summary["status"] = "completed_with_warnings"
+    if not publish_results and failed_results:
+        summary["status"] = "failed"
+    manifest.update(summary)
+    manifest["periods"] = [result.to_manifest() for result in all_results]
+    manifest["finished_at"] = now_utc_iso()
+    manifest["status"] = summary["status"]
+    manifest["error"] = None if summary["status"] != "failed" else "No se cargo ningun periodo valido"
+    write_manifest(manifest, manifest_output_dir)
+    if manifest["status"] == "failed":
+        raise RuntimeError(manifest["error"])
+    return manifest
 
 
 def main():
@@ -271,9 +401,14 @@ def main():
     with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)["etl"]
 
+    CHUNK_SIZE = config["chunk_size"]
+
+    if config.get("mode"):
+        run_concentrado_workflow(config, config_path)
+        return
+
     urls = [config["base_url"].format(mes) for mes in config["meses"]]
     final_output = Path(config["output_file"])
-    CHUNK_SIZE = config["chunk_size"]
 
     configured_periods = [
         {
