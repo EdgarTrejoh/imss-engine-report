@@ -65,3 +65,9 @@ This is run-level idempotency, not monthly upsert behavior.
 The ETL writes a JSON manifest for each local run in `reports/manifests/`. The manifest records technical lineage for the configured source URLs, periods, configuration hash, output file hash, period results and any failure message.
 
 This manifest supports auditability of a local run. It does not change IMSS business rules and does not implement historical accumulation, incremental upsert or database persistence.
+
+## Insert-Only Concentrado Control
+
+`data/processed/imss_concentrado.csv` is a local publication target for validated periods. It is insert-only in this phase: existing periods are not overwritten.
+
+Duplicate and conflict detection uses `periodo_informacion`, row count and `period_fingerprint_hash`. This control does not change any IMSS metric formula or analytical key.

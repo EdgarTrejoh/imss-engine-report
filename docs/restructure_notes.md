@@ -79,6 +79,19 @@ The repository includes a lightweight GitHub Actions workflow at `.github/workfl
 
 The workflow does not execute `etl_imss.py`, does not download IMSS files, does not run audits over large local CSV files and does not load data into any database.
 
+## Insert-Only Concentrado
+
+The current flow supports two explicit modes:
+
+- `mes_consulta`: one configured period.
+- `periodo_consulta`: an explicit ordered list of periods.
+
+Both modes feed `data/processed/imss_concentrado.csv` with insert-only semantics. Existing periods are not overwritten. The period comparison unit is `periodo_informacion`, using row count and `period_fingerprint_hash`.
+
+When `etl.mode` is active, legacy `etl.meses` must be empty. This is intentionally validated to avoid silently processing a different period list than the operator intended.
+
+Light audit runs before insertion and checks required columns, expected period, forbidden `sector_economico_3`, VSM/UMA dimensions, `ptpd`, duplicate Phase 2 analytical keys, infinite SBC values and non-empty output.
+
 ## Out of Scope
 
 PostgreSQL, API, dashboard, Docker, advanced CI/CD, cloud deployment, full-refresh orchestration, period-level upsert and full ETL execution in CI remain out of scope.

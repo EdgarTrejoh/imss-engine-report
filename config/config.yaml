@@ -1,6 +1,13 @@
-﻿etl:
+etl:
   base_url: "http://datos.imss.gob.mx/sites/default/files/asg-{}.csv"
   chunk_size: 400000
+  mode: "periodo_consulta"
+  mes_consulta: "2026-01-31"
+  periodo_consulta:
+    meses:
+      - "2016-01-31"
+      - "2016-02-29"
+      - "2016-03-31"
   output_file: "imss_analisis_profundo.csv"
-  meses:
-    - "2026-01-31"
+  concentrado_file: "data/processed/imss_concentrado.csv"
+  meses: []

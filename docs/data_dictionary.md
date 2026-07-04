@@ -50,6 +50,17 @@ The Phase 2 analytical key used for duplicate validation is:
 
 `timestamp` is not part of the analytical key.
 
+## Concentrado Control Fields
+
+The insert-only concentrado workflow records period-level control metadata in the manifest, not as required analytical columns in the CSV:
+
+| Field | Location | Notes |
+| --- | --- | --- |
+| `period_fingerprint_hash` | Manifest period result | SHA256 over a stable period summary. |
+| `rows_loaded` | Manifest period result | Rows inserted into `data/processed/imss_concentrado.csv`. |
+| `rows_existing_in_concentrado` | Manifest period result | Existing rows for the same `periodo_informacion`. |
+| `status` | Manifest period result | One of the official insert-only period statuses. |
+
 ## Core Metrics
 
 | Field | Status | Notes |
