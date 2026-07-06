@@ -7,6 +7,7 @@ implementation replaces them deliberately.
 
 from __future__ import annotations
 
+import csv
 import re
 import json
 from dataclasses import dataclass, field
@@ -15,6 +16,24 @@ from typing import Any
 
 
 PERIOD_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+SOURCE_CSV_ENCODINGS = ("utf-8-sig", "latin1")
+SOURCE_CSV_DELIMITERS = ("|", ",", ";", "\t")
+EXPECTED_SOURCE_COLUMNS = (
+    "periodo_informacion",
+    "cve_delegacion",
+    "cve_subdelegacion",
+    "cve_entidad",
+    "cve_municipio",
+    "tamaño_patron",
+    "sexo",
+    "rango_edad",
+    "rango_ingreso_vsm",
+    "rango_ingreso_uma",
+    "sector_economico_1",
+    "sector_economico_2",
+    "sector_economico_4",
+    "ptpd",
+)
 
 
 @dataclass(frozen=True)
@@ -55,6 +74,77 @@ def validate_existing_period(period: str, *, dry_run: bool = True) -> LoaderStep
             ],
         },
     )
+
+
+def _detect_delimiter(header_line: str) -> str:
+    counts = {delimiter: header_line.count(delimiter) for delimiter in SOURCE_CSV_DELIMITERS}
+    delimiter, count = max(counts.items(), key=lambda item: item[1])
+    return delimiter if count > 0 else ","
+
+
+def check_source_csv(source_path: str | Path, sample_rows: int = 5) -> dict:
+    """Inspect a CSV source with bounded reads and no DataFrame loading."""
+    path = Path(source_path)
+    exists = path.exists()
+    is_file = path.is_file() if exists else False
+    if not exists:
+        raise FileNotFoundError(f"source CSV does not exist: {path}")
+    if not is_file:
+        raise ValueError(f"source path is not a file: {path}")
+    if sample_rows < 0:
+        raise ValueError("sample_rows must be greater than or equal to 0")
+
+    last_error: Exception | None = None
+    for encoding in SOURCE_CSV_ENCODINGS:
+        try:
+            with path.open("r", encoding=encoding, newline="") as file:
+                header_line = file.readline()
+                if not header_line:
+                    delimiter = ","
+                    header: list[str] = []
+                    sample_rows_read = 0
+                else:
+                    delimiter = _detect_delimiter(header_line)
+                    header = next(csv.reader([header_line], delimiter=delimiter))
+                    sample_rows_read = 0
+                    reader = csv.reader(file, delimiter=delimiter)
+                    for _ in range(sample_rows):
+                        try:
+                            next(reader)
+                        except StopIteration:
+                            break
+                        sample_rows_read += 1
+            break
+        except UnicodeDecodeError as error:
+            last_error = error
+            continue
+    else:
+        raise UnicodeDecodeError(
+            "unknown",
+            b"",
+            0,
+            1,
+            f"Could not decode source CSV with supported encodings: {last_error}",
+        )
+
+    missing_expected_columns = [
+        column for column in EXPECTED_SOURCE_COLUMNS if column not in set(header)
+    ]
+    return {
+        "source_path": str(path),
+        "exists": exists,
+        "is_file": is_file,
+        "file_size_bytes": path.stat().st_size,
+        "sample_rows_requested": sample_rows,
+        "sample_rows_read": sample_rows_read,
+        "header": header,
+        "column_count": len(header),
+        "delimiter": delimiter,
+        "encoding": encoding,
+        "missing_expected_columns": missing_expected_columns,
+        "reads_full_csv": False,
+        "loads_dataframe": False,
+    }
 
 
 def check_existing_period(connection, period: str) -> dict:
