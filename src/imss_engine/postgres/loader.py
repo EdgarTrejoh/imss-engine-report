@@ -109,6 +109,82 @@ def check_existing_period(connection, period: str) -> dict:
     }
 
 
+def register_period_control_pending(
+    connection,
+    period: str,
+    run_id: str | None = None,
+    source_url: str | None = None,
+) -> dict:
+    """Insert a pending period_control row when the period is new.
+
+    This is an explicit write operation for the loader bootstrap. It only
+    inserts into ``imss.imss_period_control`` and never overwrites existing
+    periods.
+    """
+    validate_period(period)
+    existing = check_existing_period(connection, period)
+    if existing["exists"]:
+        return {
+            "periodo_informacion": period,
+            "inserted": False,
+            "status": None,
+            "recommended_status": existing["recommended_status"],
+            "run_id": run_id,
+            "source_url": source_url,
+            "reason": "period already exists in period_control or final table",
+            "period_check": existing,
+        }
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO imss.imss_period_control (
+                    periodo_informacion,
+                    status,
+                    row_count,
+                    period_fingerprint_hash,
+                    sum_asegurados,
+                    sum_no_trabajadores,
+                    sum_ta,
+                    sum_ta_sal,
+                    sum_masa_sal_ta,
+                    run_id,
+                    source_url,
+                    error_message
+                )
+                VALUES (
+                    %s,
+                    'pending',
+                    NULL,
+                    NULL,
+                    NULL,
+                    NULL,
+                    NULL,
+                    NULL,
+                    NULL,
+                    %s,
+                    %s,
+                    NULL
+                );
+                """,
+                (period, run_id, source_url),
+            )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+    return {
+        "periodo_informacion": period,
+        "inserted": True,
+        "status": "pending",
+        "recommended_status": "pending_registered",
+        "run_id": run_id,
+        "source_url": source_url,
+    }
+
+
 def prepare_staging(period: str, source_path: str | Path | None = None, *, dry_run: bool = True) -> LoaderStepResult:
     """Plan staging preparation without reading the source file."""
     validate_period(period)
