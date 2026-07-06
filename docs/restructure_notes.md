@@ -28,17 +28,19 @@ This pass stabilizes business rules through pure, testable functions under `src/
 
 The official audit tool is the existing DuckDB-based `imss_duckdb_exports.py`. The provisional `scripts/validate_imss_output.py` logic was absorbed into that tool and the provisional script was moved to `legacy/audit/validate_imss_output_experimental.py`.
 
-Operational wrappers now point to the DuckDB audit workflow:
+The DuckDB workflow remains active as an optional deep audit, not as legacy. It is useful for broad CSV/concentrado review, can generate multiple validation files and may take several minutes on large inputs.
 
-- `python scripts/run_audit.py <archivo_csv>`
-- `python scripts/run_profile.py <archivo_csv>` reuses the same audit workflow for now.
-- `python scripts/run_exports.py <archivo_csv>` reuses the same audit workflow for now.
+Operational wrappers currently related to the DuckDB audit workflow:
+
+- `python scripts/run_audit.py <archivo_csv>` is the recommended wrapper.
+- `python scripts/run_profile.py <archivo_csv>` is a temporary alias and candidate for deprecation.
+- `python scripts/run_exports.py <archivo_csv>` is a temporary alias and candidate for deprecation.
 
 Audit outputs are generated under `reports/audits/` and are ignored by Git except for `.gitkeep`.
 
 Active audit/validation files:
 
-- `imss_duckdb_exports.py`
+- `imss_duckdb_exports.py` as active optional deep audit.
 - `scripts/run_audit.py`
 - `scripts/run_profile.py`
 - `scripts/run_exports.py`
@@ -65,7 +67,7 @@ This covers full-run idempotency. Incremental monthly upsert, partial-run recove
 
 The ETL now writes a local JSON manifest under `reports/manifests/` for each run. The manifest records the run id, timestamps, status, config path and hash, configured URLs/periods, period-level results, final output path, final output SHA256 and file size.
 
-After the final CSV is published, the ETL runs the official DuckDB audit against that final file and writes audit outputs under `reports/audits/<run_id>/`. The manifest records `audit_output_dir`, `audit_status`, `audit_files` and `audit_error`.
+For the legacy full-output flow, after the final CSV is published, the ETL runs the official DuckDB audit against that final file and writes audit outputs under `reports/audits/<run_id>/`. The manifest records `audit_output_dir`, `audit_status`, `audit_files` and `audit_error`.
 
 On ETL failure before publishing, the manifest is written with status `failed` and the previous final CSV is preserved. On audit failure after publishing, the final CSV remains available, but the manifest is marked `status: failed` and `audit_status: failed` because the run was not fully certified.
 
@@ -91,6 +93,8 @@ Both modes feed `data/processed/imss_concentrado.csv` with insert-only semantics
 When `etl.mode` is active, legacy `etl.meses` must be empty. This is intentionally validated to avoid silently processing a different period list than the operator intended.
 
 Light audit runs before insertion and checks required columns, expected period, forbidden `sector_economico_3`, VSM/UMA dimensions, `ptpd`, duplicate Phase 2 analytical keys, infinite SBC values and non-empty output.
+
+The concentrado flow writes a JSON manifest for the run, including requested periods, period results, loaded/existing/conflict/failed periods and concentrado row counts. It does not run DuckDB automatically over the full concentrado CSV. The DuckDB audit remains available as a manual snapshot tool through `scripts/run_audit.py`.
 
 ## Out of Scope
 

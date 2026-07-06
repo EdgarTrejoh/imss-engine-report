@@ -4,7 +4,7 @@
 
 El repositorio contiene un motor local IMSS en estabilizacion. El ETL principal sigue en `etl_imss.py`; la logica de normalizacion, transformacion, metricas y agregacion vive en `src/imss_engine/` con pruebas unitarias.
 
-La auditoria oficial esta en `imss_duckdb_exports.py`. El manifest de corrida esta en `src/imss_engine/manifest.py`.
+La auditoria ligera operativa esta en `src/imss_engine/light_audit.py`. La auditoria DuckDB profunda opcional esta en `imss_duckdb_exports.py`. El manifest de corrida esta en `src/imss_engine/manifest.py`.
 
 ## Cerrado En Fase 2
 
@@ -12,13 +12,18 @@ La auditoria oficial esta en `imss_duckdb_exports.py`. El manifest de corrida es
 - Auditoria DuckDB oficial.
 - Idempotencia por corrida completa con staging y replace atomico.
 - Manifest JSON de corrida.
-- Integracion ETL -> archivo final -> auditoria DuckDB -> manifest.
+- Integracion legacy ETL -> archivo final -> auditoria DuckDB -> manifest.
 - Pruebas locales con fixtures pequenos.
 - GitHub Actions ligero para ejecutar `pytest` sin datos reales.
 - Consolidacion insert-only hacia `data/processed/imss_concentrado.csv`.
 - Modos `mes_consulta` y `periodo_consulta`.
 - Hash ligero `period_fingerprint_hash`.
-- Auditoria ligera por periodo antes de insertar.
+- Auditoria ligera por periodo antes de insertar. Este flujo no ejecuta DuckDB automaticamente sobre el concentrado completo.
+
+## Clasificacion De Auditorias
+
+- Auditoria ligera: validacion operativa, rapida, por periodo y obligatoria antes de insertar al concentrado.
+- Auditoria DuckDB: auditoria profunda opcional/on-demand para revisar un CSV o concentrado completo. Puede tardar varios minutos y no debe asumirse como paso obligatorio despues de cada carga del concentrado.
 
 ## Operativo Actual
 
@@ -26,6 +31,7 @@ La auditoria oficial esta en `imss_duckdb_exports.py`. El manifest de corrida es
 - Ejecutar auditoria manual: `python scripts/run_audit.py <archivo_csv> --output-dir reports/audits/audit_manual`.
 - Ejecutar ETL local: `python scripts/run_etl.py`.
 - Configurar `etl.mode` como `mes_consulta` o `periodo_consulta` antes de ejecutar ETL real.
+- Ejecutar DuckDB manualmente sobre el concentrado solo cuando se requiera un snapshot completo de auditoria.
 
 ## Fuera De Alcance Actual
 

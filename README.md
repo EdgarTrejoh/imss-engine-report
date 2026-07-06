@@ -67,6 +67,25 @@ ETL local, solo cuando se quiera descargar/procesar datos reales:
 
 No ejecutes el ETL dentro de pruebas unitarias.
 
+## Auditorias
+
+Auditoria ligera operativa:
+
+- Es usada por el flujo concentrado insert-only.
+- Corre por periodo antes de insertar al concentrado.
+- Es rapida y obligatoria dentro de `mes_consulta` y `periodo_consulta`.
+- Revisa columnas requeridas, periodo esperado, ausencia de `sector_economico_3`, VSM/UMA, `ptpd`, duplicados de llave analitica e SBC infinito.
+
+Auditoria DuckDB profunda:
+
+- Es opcional y se ejecuta manualmente.
+- Sirve para una revision amplia de un CSV o del concentrado.
+- Puede generar multiples archivos de validacion en `reports/audits/`.
+- Puede tardar varios minutos en archivos grandes.
+- No corre automaticamente en `mes_consulta` ni `periodo_consulta`.
+- No corre en CI.
+- El comando recomendado es `scripts/run_audit.py`.
+
 ## Reglas De Negocio Fase 2
 
 - La base IMSS se trata como cubo agregado, no como base individual.
@@ -80,13 +99,27 @@ No ejecutes el ETL dentro de pruebas unitarias.
 
 ## Salida, Auditoria Y Manifest
 
-`etl_imss.py` publica la salida final con staging por corrida completa: escribe primero a un archivo temporal y reemplaza el CSV final con `os.replace()` solo si todos los periodos terminan correctamente.
+`etl_imss.py` conserva dos flujos operativos locales:
 
-Despues de publicar el archivo final, el ETL ejecuta la auditoria DuckDB sobre ese archivo. La auditoria integrada usa:
+Flujo legacy sin `etl.mode`:
+
+- Usa `etl.meses`.
+- Publica la salida final con staging por corrida completa: escribe primero a un archivo temporal y reemplaza el CSV final con `os.replace()` solo si todos los periodos terminan correctamente.
+- Despues de publicar el archivo final, puede ejecutar la auditoria DuckDB sobre ese CSV final.
+- La auditoria integrada usa:
 
 ```text
 reports/audits/<run_id>/
 ```
+
+Flujo concentrado insert-only con `etl.mode = mes_consulta` o `etl.mode = periodo_consulta`:
+
+- Procesa los periodos configurados explicitamente.
+- Usa auditoria ligera por periodo antes de insertar al concentrado.
+- Calcula `period_fingerprint_hash` por periodo.
+- Evita duplicados y detecta conflictos por conteo de filas o hash.
+- Escribe manifest JSON de la corrida.
+- No ejecuta DuckDB automaticamente sobre el concentrado completo.
 
 El manifest se guarda como:
 
@@ -94,9 +127,9 @@ El manifest se guarda como:
 reports/manifests/manifest_<run_id>.json
 ```
 
-El manifest registra config usada, hash de config, periodos/URLs, archivo final, hash del archivo final, auditoria generada, estado de auditoria y errores.
+El manifest registra config usada, hash de config, periodos/URLs, archivo final o concentrado, hashes disponibles, estado de auditoria y errores.
 
-La auditoria manual puede sobrescribir outputs si se usa el mismo `--output-dir`. La auditoria integrada al ETL usa un directorio por `run_id` para conservar evidencia trazable de la corrida.
+La auditoria manual DuckDB sigue disponible y puede sobrescribir outputs si se usa el mismo `--output-dir`.
 
 ## Concentrado Insert-Only
 
@@ -143,6 +176,8 @@ Reglas insert-only por `periodo_informacion`:
 El hash ligero `period_fingerprint_hash` resume el periodo con conteo de filas, sumas principales y cantidad de llaves analiticas distintas. Sirve para detectar cambios funcionales sin hacer auditoria forense del archivo completo.
 
 Antes de insertar, cada periodo pasa por auditoria ligera: columnas requeridas, periodo correcto, ausencia de `sector_economico_3`, presencia de VSM/UMA y `ptpd`, duplicados por llave analitica Fase 2, SBC infinito y dataframe no vacio.
+
+El concentrado insert-only no dispara automaticamente la auditoria DuckDB sobre `data/processed/imss_concentrado.csv`; si se requiere ese control, debe ejecutarse manualmente con `scripts/run_audit.py`.
 
 Esta fase no implementa `full_refresh`, `upsert_period`, sobrescritura de periodos existentes ni acumulacion en base de datos.
 
