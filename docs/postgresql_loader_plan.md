@@ -89,3 +89,13 @@ SELECT current_database(), current_schema();
 ```
 
 Despues cierra la conexion. No crea tablas, no ejecuta DDL, no lee el CSV concentrado, no carga datos y no imprime la password.
+
+## Smoke Test De Estructura
+
+Cuando el DDL ya fue aplicado en una base PostgreSQL local, se puede validar que existan el schema, tablas, vistas y constraints criticas con:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\check_postgres_schema.py
+```
+
+El script consulta unicamente catalogos de PostgreSQL (`information_schema` y `pg_constraint`). No ejecuta DDL, no crea tablas, no lee el CSV concentrado, no carga datos y no imprime la password.
