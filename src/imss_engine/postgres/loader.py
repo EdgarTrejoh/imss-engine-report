@@ -34,6 +34,25 @@ EXPECTED_SOURCE_COLUMNS = (
     "sector_economico_4",
     "ptpd",
 )
+PROFILE_DIMENSION_COLUMNS = (
+    "periodo_informacion",
+    "ptpd",
+    "rango_ingreso_vsm",
+    "rango_ingreso_uma",
+    "sector_economico_1",
+    "sector_economico_2",
+    "sector_economico_4",
+    "sexo",
+)
+PROFILE_NUMERIC_COLUMNS = (
+    "ta",
+    "ta_sal",
+    "masa_sal_ta",
+    "asegurados",
+    "no_trabajadores",
+)
+DISTINCT_COUNT_LIMIT = 10000
+SAMPLE_VALUES_LIMIT = 10
 
 
 @dataclass(frozen=True)
@@ -144,6 +163,119 @@ def check_source_csv(source_path: str | Path, sample_rows: int = 5) -> dict:
         "missing_expected_columns": missing_expected_columns,
         "reads_full_csv": False,
         "loads_dataframe": False,
+    }
+
+
+def _empty_dimension_profile() -> dict:
+    return {
+        "non_empty_count": 0,
+        "empty_count": 0,
+        "distinct_count_limited": 0,
+        "sample_values": [],
+    }
+
+
+def _empty_numeric_profile() -> dict:
+    return {
+        "non_empty_count": 0,
+        "empty_count": 0,
+        "numeric_parse_errors": 0,
+        "min": None,
+        "max": None,
+        "sum": 0.0,
+    }
+
+
+def profile_source_csv_streaming(source_path: str | Path, max_rows: int | None = 10000) -> dict:
+    """Profile a CSV source row by row with bounded memory usage."""
+    if max_rows is None:
+        raise ValueError("max_rows must be a positive integer; unlimited profiling is not supported")
+    if max_rows <= 0:
+        raise ValueError("max_rows must be greater than 0")
+
+    source_check = check_source_csv(source_path, sample_rows=0)
+    path = Path(source_path)
+    header = source_check["header"]
+    header_set = set(header)
+    delimiter = source_check["delimiter"]
+    encoding = source_check["encoding"]
+
+    dimension_profiles = {
+        column: _empty_dimension_profile()
+        for column in PROFILE_DIMENSION_COLUMNS
+        if column in header_set
+    }
+    numeric_profiles = {
+        column: _empty_numeric_profile()
+        for column in PROFILE_NUMERIC_COLUMNS
+        if column in header_set
+    }
+    distinct_values = {column: set() for column in dimension_profiles}
+    missing_profile_columns = [
+        column
+        for column in (*PROFILE_DIMENSION_COLUMNS, *PROFILE_NUMERIC_COLUMNS)
+        if column not in header_set
+    ]
+
+    rows_profiled = 0
+    with path.open("r", encoding=encoding, newline="") as file:
+        reader = csv.DictReader(file, delimiter=delimiter)
+        for row in reader:
+            if rows_profiled >= max_rows:
+                break
+            rows_profiled += 1
+
+            for column, profile in dimension_profiles.items():
+                value = (row.get(column) or "").strip()
+                if value:
+                    profile["non_empty_count"] += 1
+                    if len(distinct_values[column]) < DISTINCT_COUNT_LIMIT:
+                        distinct_values[column].add(value)
+                    if value not in profile["sample_values"] and len(profile["sample_values"]) < SAMPLE_VALUES_LIMIT:
+                        profile["sample_values"].append(value)
+                else:
+                    profile["empty_count"] += 1
+
+            for column, profile in numeric_profiles.items():
+                raw_value = (row.get(column) or "").strip()
+                if not raw_value:
+                    profile["empty_count"] += 1
+                    continue
+                profile["non_empty_count"] += 1
+                try:
+                    value = float(raw_value)
+                except ValueError:
+                    profile["numeric_parse_errors"] += 1
+                    continue
+                profile["sum"] += value
+                profile["min"] = value if profile["min"] is None else min(profile["min"], value)
+                profile["max"] = value if profile["max"] is None else max(profile["max"], value)
+
+    for column, values in distinct_values.items():
+        dimension_profiles[column]["distinct_count_limited"] = len(values)
+
+    return {
+        "source_path": str(path),
+        "file_size_bytes": source_check["file_size_bytes"],
+        "encoding": encoding,
+        "delimiter": delimiter,
+        "column_count": source_check["column_count"],
+        "rows_profiled": rows_profiled,
+        "max_rows": max_rows,
+        "reached_max_rows": rows_profiled >= max_rows,
+        "reads_full_csv": False,
+        "loads_dataframe": False,
+        "opens_database_connection": False,
+        "missing_expected_columns": source_check["missing_expected_columns"],
+        "missing_profile_columns": missing_profile_columns,
+        "has_ptpd": "ptpd" in header_set,
+        "has_rango_ingreso_vsm": "rango_ingreso_vsm" in header_set,
+        "has_rango_ingreso_uma": "rango_ingreso_uma" in header_set,
+        "has_sector_economico_4": "sector_economico_4" in header_set,
+        "has_ta_sal": "ta_sal" in header_set,
+        "has_masa_sal_ta": "masa_sal_ta" in header_set,
+        "dimension_profiles": dimension_profiles,
+        "numeric_profiles": numeric_profiles,
     }
 
 

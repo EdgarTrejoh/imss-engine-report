@@ -84,6 +84,16 @@ Antes de cargar cualquier dato, se puede inspeccionar localmente un CSV fuente d
 
 Este modo no requiere variables `IMSS_PG_*`, no conecta a PostgreSQL, no carga datos, no lee el CSV completo y no usa pandas. Solo inspecciona el encabezado y una muestra pequena de filas para reportar delimitador, encoding, columnas y columnas esperadas faltantes.
 
+## Perfilado Streaming Del CSV Fuente
+
+El siguiente pre-check perfila el CSV fuente fila por fila con un limite explicito:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_postgres_loader.py --profile-source-csv --source-csv .\data\processed\imss_concentrado.csv --max-rows 10000
+```
+
+Este modo no requiere variables `IMSS_PG_*`, no conecta a PostgreSQL, no carga datos, no lee el CSV completo por defecto y no usa pandas. Recorre el archivo con lectura streaming hasta `--max-rows` y reporta layout, columnas criticas, dimensiones clave y metricas numericas basicas antes de cualquier staging.
+
 ## Chequeo De Periodo Existente
 
 El primer chequeo real del loader es solo de lectura. Permite validar si un periodo ya existe antes de una carga futura:
