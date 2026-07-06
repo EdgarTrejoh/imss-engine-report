@@ -17,6 +17,7 @@ from src.imss_engine.postgres.loader import (
     check_existing_period,
     check_source_csv,
     plan_insert_only_load,
+    profile_source_csv_streaming,
     register_period_control_pending,
     register_run_manifest,
 )
@@ -41,6 +42,12 @@ def main() -> None:
         help="Inspect a CSV header and bounded sample without connecting to PostgreSQL.",
     )
     parser.add_argument(
+        "--profile-source-csv",
+        action="store_true",
+        help="Profile a CSV with streaming reads and bounded row count.",
+    )
+    parser.add_argument("--max-rows", type=int, default=10000, help="Maximum rows to profile in streaming mode.")
+    parser.add_argument(
         "--check-existing",
         action="store_true",
         help="Run a read-only PostgreSQL check for an existing period.",
@@ -59,13 +66,14 @@ def main() -> None:
 
     write_or_check_flags = [
         args.check_source_csv,
+        args.profile_source_csv,
         args.check_existing,
         args.register_period_control,
         args.register_run_manifest,
     ]
     if sum(bool(flag) for flag in write_or_check_flags) > 1:
         print(
-            "Use only one of --check-source-csv, --check-existing, "
+            "Use only one of --check-source-csv, --profile-source-csv, --check-existing, "
             "--register-period-control or --register-run-manifest.",
             file=sys.stderr,
         )
@@ -96,8 +104,33 @@ def main() -> None:
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         return
 
+    if args.profile_source_csv:
+        if not args.source_csv:
+            print("--profile-source-csv requires --source-csv.", file=sys.stderr)
+            raise SystemExit(2)
+        try:
+            result = profile_source_csv_streaming(args.source_csv, max_rows=args.max_rows)
+        except Exception as error:
+            print(f"Source CSV profile failed: {error}", file=sys.stderr)
+            raise SystemExit(1) from error
+
+        payload = {
+            "mode": "profile_source_csv",
+            "opens_database_connection": False,
+            "reads_source_csv": True,
+            "reads_full_csv": False,
+            "loads_dataframe": False,
+            "writes_period_control_only": False,
+            "writes_run_manifest_only": False,
+            "touches_final_table": False,
+            "touches_staging_table": False,
+            "result": result,
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+
     if not args.period:
-        print("--period is required unless --check-source-csv is used.", file=sys.stderr)
+        print("--period is required unless --check-source-csv or --profile-source-csv is used.", file=sys.stderr)
         raise SystemExit(2)
 
     if args.register_run_manifest and not args.run_id:
