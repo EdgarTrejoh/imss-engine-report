@@ -74,6 +74,16 @@ python scripts/run_postgres_loader.py --period 2026-01-31
 
 El comando imprime el plan de pasos futuro, no abre conexion y no lee archivos de datos.
 
+## Chequeo Controlado Del CSV Fuente
+
+Antes de cargar cualquier dato, se puede inspeccionar localmente un CSV fuente de forma acotada:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_postgres_loader.py --check-source-csv --source-csv .\ruta\al\archivo.csv --sample-rows 5
+```
+
+Este modo no requiere variables `IMSS_PG_*`, no conecta a PostgreSQL, no carga datos, no lee el CSV completo y no usa pandas. Solo inspecciona el encabezado y una muestra pequena de filas para reportar delimitador, encoding, columnas y columnas esperadas faltantes.
+
 ## Chequeo De Periodo Existente
 
 El primer chequeo real del loader es solo de lectura. Permite validar si un periodo ya existe antes de una carga futura:
