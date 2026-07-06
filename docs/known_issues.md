@@ -11,9 +11,13 @@
 - GitHub Actions currently provides only lightweight test validation with fixtures and no network-dependent ETL execution.
 - Official catalog joins for sector, entity, sex, age and income ranges are pending until local documented catalog files are available.
 - The DuckDB audit validates generated CSV structure and arithmetic consistency, but validation against official IMSS bulletins remains an external control and does not replace methodology validation.
+- The DuckDB audit is intentionally deep and heavy. On large files it can take several minutes and generate multiple files under `reports/audits/`.
+- Reusing the same DuckDB `output_dir` can overwrite previous manual audit snapshots.
+- DuckDB deep audit should not be treated as a mandatory step for the normal monthly concentrado flow.
 - Full-run output idempotency is implemented with staging and atomic replace. Incremental upsert by period is still pending.
 - Run manifests provide local technical traceability, but they are not a historical registry or period-level upsert log.
-- Integrated DuckDB audit is part of run certification. If it fails after final CSV publication, the manifest records a failed run even though the CSV remains on disk.
+- Integrated DuckDB audit is part of legacy full-output run certification. If it fails after final CSV publication, the manifest records a failed run even though the CSV remains on disk.
+- The `mes_consulta` and `periodo_consulta` concentrado flow uses light period audit plus manifest. It does not run DuckDB automatically over the full concentrado CSV.
 - Two additional periods should be validated before treating the Phase 2 workflow as broadly stable.
 - `ptpd` still needs historical review for periods where the source column does not appear.
 - Do not open large generated CSV files in Excel; use DuckDB-based audit outputs or analytical tools built for large files.
