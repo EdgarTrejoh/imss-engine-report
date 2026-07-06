@@ -9,7 +9,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.imss_engine.postgres.config import PostgresConfig
-from src.imss_engine.postgres.loader import plan_insert_only_load
+from src.imss_engine.postgres.connection import (
+    PostgresDriverMissingError,
+    connect,
+)
+from src.imss_engine.postgres.loader import check_existing_period, plan_insert_only_load
 
 
 def main() -> None:
@@ -23,9 +27,49 @@ def main() -> None:
         help="Future source CSV path. The skeleton does not read this file.",
     )
     parser.add_argument("--run-id", default=None, help="Optional future run_id.")
+    parser.add_argument(
+        "--check-existing",
+        action="store_true",
+        help="Run a read-only PostgreSQL check for an existing period.",
+    )
     args = parser.parse_args()
 
     config = PostgresConfig.from_env()
+    if args.check_existing:
+        if not config.is_complete:
+            print(
+                "PostgreSQL config is incomplete. Set IMSS_PG_HOST, IMSS_PG_PORT, "
+                "IMSS_PG_DATABASE, IMSS_PG_USER and IMSS_PG_PASSWORD.",
+                file=sys.stderr,
+            )
+            print(f"Config detected: {config.masked()}", file=sys.stderr)
+            raise SystemExit(2)
+
+        connection = None
+        try:
+            connection = connect(config)
+            result = check_existing_period(connection, args.period)
+        except PostgresDriverMissingError as error:
+            print(f"PostgreSQL driver missing: {error}", file=sys.stderr)
+            raise SystemExit(2) from error
+        except Exception as error:
+            print(f"PostgreSQL period check failed: {error}", file=sys.stderr)
+            raise SystemExit(1) from error
+        finally:
+            if connection is not None:
+                connection.close()
+
+        payload = {
+            "mode": "check_existing",
+            "opens_database_connection": True,
+            "executes_only_select": True,
+            "reads_source_csv": False,
+            "postgres_config": config.masked(),
+            "period_check": result,
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+
     plan = plan_insert_only_load(args.period, source_path=args.source_csv, run_id=args.run_id)
 
     payload = {

@@ -74,6 +74,21 @@ python scripts/run_postgres_loader.py --period 2026-01-31
 
 El comando imprime el plan de pasos futuro, no abre conexion y no lee archivos de datos.
 
+## Chequeo De Periodo Existente
+
+El primer chequeo real del loader es solo de lectura. Permite validar si un periodo ya existe antes de una carga futura:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_postgres_loader.py --period 2026-01-31 --check-existing
+```
+
+Este modo abre conexion con las variables `IMSS_PG_*` y ejecuta unicamente `SELECT` sobre:
+
+- `imss.imss_period_control`
+- `imss.imss_hechos_asegurados`
+
+El comando no lee el CSV concentrado, no ejecuta DDL, no crea tablas, no carga datos, no modifica PostgreSQL y no imprime la password. Si el periodo aparece en control, lo reporta como `already_exists`; si hay filas finales sin control, lo reporta como conflicto; si no aparece en ninguna tabla, lo reporta como `new_period`.
+
 ## Smoke Test De Conexion
 
 Cuando exista un entorno local PostgreSQL configurado, se puede validar solo la conectividad con:
