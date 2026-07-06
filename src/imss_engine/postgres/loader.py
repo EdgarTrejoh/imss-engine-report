@@ -53,6 +53,7 @@ PROFILE_NUMERIC_COLUMNS = (
 )
 DISTINCT_COUNT_LIMIT = 10000
 SAMPLE_VALUES_LIMIT = 10
+TAMANO_PATRON_COLUMN = "tama\u00f1o_patron"
 STAGING_INSERT_COLUMNS = (
     "run_id",
     "periodo_informacion",
@@ -139,6 +140,71 @@ STAGING_NUMERIC_COLUMNS = {
 STAGING_SOURCE_ALIASES = {
     "tamaño_patron": ("tamaño_patron", "tamaÃ±o_patron"),
 }
+
+
+FINAL_DIMENSION_COLUMNS = (
+    "periodo_informacion",
+    "cve_delegacion",
+    "cve_subdelegacion",
+    "cve_entidad",
+    "cve_municipio",
+    TAMANO_PATRON_COLUMN,
+    "sexo",
+    "rango_edad",
+    "rango_ingreso_vsm",
+    "rango_ingreso_uma",
+    "sector_economico_1",
+    "sector_economico_2",
+    "sector_economico_4",
+    "ptpd",
+)
+FINAL_REQUIRED_NUMERIC_COLUMNS = (
+    "asegurados",
+    "no_trabajadores",
+    "ta",
+    "ta_sal",
+    "tpu",
+    "tpc",
+    "teu",
+    "tec",
+    "tpu_sal",
+    "tpc_sal",
+    "teu_sal",
+    "tec_sal",
+    "masa_sal_ta",
+    "masa_sal_tpu",
+    "masa_sal_tpc",
+    "masa_sal_teu",
+    "masa_sal_tec",
+    "puestos_permanentes",
+    "puestos_eventuales",
+    "puestos_urbanos",
+    "puestos_campo",
+    "masa_sal_permanentes",
+    "masa_sal_eventuales",
+    "masa_sal_urbanos",
+    "masa_sal_campo",
+)
+FINAL_NULLABLE_NUMERIC_COLUMNS = (
+    "sbc_total",
+    "sbc_permanentes",
+    "sbc_eventuales",
+    "sbc_urbanos",
+    "sbc_campo",
+)
+FINAL_METADATA_COLUMNS = (
+    "run_id",
+    "period_fingerprint_hash",
+    "source_url",
+    "loaded_at",
+    "created_at",
+)
+FINAL_INSERT_COLUMNS = (
+    *FINAL_DIMENSION_COLUMNS,
+    *FINAL_REQUIRED_NUMERIC_COLUMNS,
+    *FINAL_NULLABLE_NUMERIC_COLUMNS,
+    *FINAL_METADATA_COLUMNS,
+)
 
 
 @dataclass(frozen=True)
@@ -454,6 +520,74 @@ def _staging_count(cursor, period: str) -> int:
     return int(cursor.fetchone()[0])
 
 
+def _final_count(cursor, period: str) -> int:
+    cursor.execute(
+        """
+        SELECT COUNT(*)
+        FROM imss.imss_hechos_asegurados
+        WHERE periodo_informacion = %s;
+        """,
+        (period,),
+    )
+    return int(cursor.fetchone()[0])
+
+
+def _period_control_exists(cursor, period: str) -> bool:
+    cursor.execute(
+        """
+        SELECT 1
+        FROM imss.imss_period_control
+        WHERE periodo_informacion = %s;
+        """,
+        (period,),
+    )
+    return cursor.fetchone() is not None
+
+
+def _ptpd_empty_count_in_staging(cursor, period: str) -> int:
+    cursor.execute(
+        """
+        SELECT COUNT(*)
+        FROM imss.imss_staging_asegurados
+        WHERE periodo_informacion = %s
+          AND (ptpd IS NULL OR BTRIM(ptpd) = '');
+        """,
+        (period,),
+    )
+    return int(cursor.fetchone()[0])
+
+
+def _pg_column(column: str) -> str:
+    return f'"{column}"' if column == TAMANO_PATRON_COLUMN else column
+
+
+def _staging_column_ref(column: str) -> str:
+    return f'stg."{column}"' if column == TAMANO_PATRON_COLUMN else f"stg.{column}"
+
+
+def _final_select_expression(column: str) -> str:
+    if column == "periodo_informacion":
+        return "stg.periodo_informacion"
+    if column in FINAL_DIMENSION_COLUMNS:
+        source = _staging_column_ref(column)
+        return f"COALESCE(NULLIF(BTRIM({source}), ''), 'no_disponible')"
+    if column in FINAL_REQUIRED_NUMERIC_COLUMNS:
+        return f"COALESCE({_staging_column_ref(column)}, 0)"
+    if column in FINAL_NULLABLE_NUMERIC_COLUMNS:
+        return _staging_column_ref(column)
+    if column == "run_id":
+        return "COALESCE(%s::text, stg.run_id)"
+    if column == "period_fingerprint_hash":
+        return "stg.period_fingerprint_hash"
+    if column == "source_url":
+        return "stg.source_url"
+    if column == "loaded_at":
+        return "COALESCE(stg.loaded_at, CURRENT_TIMESTAMP)"
+    if column == "created_at":
+        return "COALESCE(stg.created_at, CURRENT_TIMESTAMP)"
+    raise ValueError(f"Unsupported final insert column: {column}")
+
+
 def load_staging_insert_only(
     connection,
     source_path: str | Path,
@@ -619,6 +753,133 @@ def load_staging_insert_only(
         "reads_source_csv": True,
         "reads_full_csv": max_rows is None,
         "loads_dataframe": False,
+    }
+
+
+def promote_staging_to_final_insert_only(
+    connection,
+    period: str,
+    run_id: str | None = None,
+    batch_size: int = 50000,
+) -> dict:
+    """Promote one staged period into final facts with insert-only semantics."""
+    validate_period(period)
+    if batch_size <= 0:
+        raise ValueError("batch_size must be greater than 0")
+
+    committed = False
+    rolled_back = False
+    ptpd_mapped_to = "no_disponible"
+
+    try:
+        with connection.cursor() as cursor:
+            period_control_exists = _period_control_exists(cursor, period)
+            staging_row_count_before = _staging_count(cursor, period)
+            final_row_count_before = _final_count(cursor, period)
+            ptpd_empty_rows_in_staging = _ptpd_empty_count_in_staging(cursor, period)
+
+            base_result = {
+                "periodo_informacion": period,
+                "batch_size": batch_size,
+                "period_control_exists": period_control_exists,
+                "staging_row_count_before": staging_row_count_before,
+                "final_row_count_before": final_row_count_before,
+                "rows_inserted_final": 0,
+                "final_row_count_after": final_row_count_before,
+                "staging_row_count_after": staging_row_count_before,
+                "committed": False,
+                "rolled_back": False,
+                "inserted": False,
+                "reads_source_csv": False,
+                "reads_full_csv": False,
+                "loads_dataframe": False,
+                "opens_database_connection": True,
+                "touches_staging_table": False,
+                "touches_final_table": False,
+                "writes_period_control_only": False,
+                "writes_run_manifest_only": False,
+                "ptpd_empty_rows_in_staging": ptpd_empty_rows_in_staging,
+                "ptpd_mapped_to": ptpd_mapped_to,
+            }
+
+            if not period_control_exists:
+                return {**base_result, "reason": "missing_period_control"}
+            if staging_row_count_before == 0:
+                return {**base_result, "reason": "missing_staging_rows"}
+            if final_row_count_before > 0:
+                return {**base_result, "reason": "final_period_already_exists"}
+
+            cursor.execute(
+                """
+                SELECT MIN(staging_id), MAX(staging_id)
+                FROM imss.imss_staging_asegurados
+                WHERE periodo_informacion = %s;
+                """,
+                (period,),
+            )
+            min_staging_id, max_staging_id = cursor.fetchone()
+            if min_staging_id is None or max_staging_id is None:
+                return {**base_result, "reason": "missing_staging_rows"}
+
+            target_columns = ", ".join(_pg_column(column) for column in FINAL_INSERT_COLUMNS)
+            select_columns = ",\n                    ".join(
+                _final_select_expression(column) for column in FINAL_INSERT_COLUMNS
+            )
+            insert_sql = f"""
+                INSERT INTO imss.imss_hechos_asegurados ({target_columns})
+                SELECT
+                    {select_columns}
+                FROM imss.imss_staging_asegurados AS stg
+                WHERE stg.periodo_informacion = %s
+                  AND stg.staging_id > %s
+                  AND stg.staging_id <= %s
+                ORDER BY stg.staging_id;
+            """
+
+            rows_inserted_final = 0
+            lower_bound = int(min_staging_id) - 1
+            max_bound = int(max_staging_id)
+            while lower_bound < max_bound:
+                upper_bound = min(lower_bound + batch_size, max_bound)
+                cursor.execute(insert_sql, (run_id, period, lower_bound, upper_bound))
+                if cursor.rowcount and cursor.rowcount > 0:
+                    rows_inserted_final += int(cursor.rowcount)
+                lower_bound = upper_bound
+
+            final_row_count_after = _final_count(cursor, period)
+            staging_row_count_after = _staging_count(cursor, period)
+            if rows_inserted_final <= 0:
+                rows_inserted_final = max(final_row_count_after - final_row_count_before, 0)
+
+        connection.commit()
+        committed = True
+    except Exception:
+        connection.rollback()
+        rolled_back = True
+        raise
+
+    return {
+        "periodo_informacion": period,
+        "batch_size": batch_size,
+        "period_control_exists": period_control_exists,
+        "staging_row_count_before": staging_row_count_before,
+        "final_row_count_before": final_row_count_before,
+        "rows_inserted_final": rows_inserted_final,
+        "final_row_count_after": final_row_count_after,
+        "staging_row_count_after": staging_row_count_after,
+        "committed": committed,
+        "rolled_back": rolled_back,
+        "inserted": rows_inserted_final > 0,
+        "reads_source_csv": False,
+        "reads_full_csv": False,
+        "loads_dataframe": False,
+        "opens_database_connection": True,
+        "touches_staging_table": False,
+        "touches_final_table": rows_inserted_final > 0,
+        "writes_period_control_only": False,
+        "writes_run_manifest_only": False,
+        "ptpd_empty_rows_in_staging": ptpd_empty_rows_in_staging,
+        "ptpd_mapped_to": ptpd_mapped_to,
     }
 
 
