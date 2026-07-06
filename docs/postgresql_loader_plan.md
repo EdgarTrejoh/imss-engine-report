@@ -89,6 +89,18 @@ Este modo abre conexion con las variables `IMSS_PG_*` y ejecuta unicamente `SELE
 
 El comando no lee el CSV concentrado, no ejecuta DDL, no crea tablas, no carga datos, no modifica PostgreSQL y no imprime la password. Si el periodo aparece en control, lo reporta como `already_exists`; si hay filas finales sin control, lo reporta como conflicto; si no aparece en ninguna tabla, lo reporta como `new_period`.
 
+## Registro Inicial En Period Control
+
+La primera escritura controlada permitida es registrar un periodo nuevo como `pending` en `imss.imss_period_control`:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_postgres_loader.py --period 2026-01-31 --register-period-control --run-id manual_test_20260131
+```
+
+Este modo primero ejecuta el chequeo de periodo existente. Si el periodo ya existe en `imss.imss_period_control` o si hay filas en `imss.imss_hechos_asegurados`, no inserta nada y reporta la razon. Si el periodo es nuevo, inserta una sola fila con `status = 'pending'`.
+
+El registro no lee el CSV concentrado, no carga hechos, no usa staging, no ejecuta DDL, no crea tablas, no usa upsert, no usa `ON CONFLICT DO UPDATE` y no sobrescribe periodos existentes.
+
 ## Smoke Test De Conexion
 
 Cuando exista un entorno local PostgreSQL configurado, se puede validar solo la conectividad con:
