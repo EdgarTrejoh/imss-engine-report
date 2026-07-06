@@ -143,6 +143,18 @@ Este modo valida que el periodo exista previamente en `period_control`. Si falta
 
 El registro no lee el CSV concentrado, no carga hechos, no usa staging, no modifica `period_control`, no usa upsert, no usa `ON CONFLICT DO UPDATE` y no sobrescribe manifests existentes.
 
+## Carga Insert-Only A Staging
+
+El primer resguardo controlado del CSV fuente hacia PostgreSQL carga exclusivamente un periodo a `imss.imss_staging_asegurados`:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_postgres_loader.py --load-staging --source-csv .\data\processed\imss_concentrado.csv --period 2026-01-31 --batch-size 5000
+```
+
+Este modo requiere que el periodo exista previamente en `imss.imss_period_control` y que no existan filas previas para ese periodo en staging. Lee el CSV por streaming, filtra `periodo_informacion`, inserta por lotes parametrizados y hace commit solo al terminar correctamente.
+
+La carga staging no toca `imss.imss_hechos_asegurados`, no modifica `period_control`, no modifica `run_manifest`, no usa pandas, no carga DataFrame, no usa upsert, no usa `ON CONFLICT DO UPDATE`, no ejecuta `UPDATE`, no ejecuta `DELETE`, no ejecuta `TRUNCATE` y no implementa `full_refresh`.
+
 ## Smoke Test De Conexion
 
 Cuando exista un entorno local PostgreSQL configurado, se puede validar solo la conectividad con:

@@ -16,6 +16,7 @@ from src.imss_engine.postgres.connection import (
 from src.imss_engine.postgres.loader import (
     check_existing_period,
     check_source_csv,
+    load_staging_insert_only,
     plan_insert_only_load,
     profile_source_csv_streaming,
     register_period_control_pending,
@@ -35,6 +36,7 @@ def main() -> None:
         help="Future source CSV path. The skeleton does not read this file.",
     )
     parser.add_argument("--sample-rows", type=int, default=5, help="Rows to sample for source CSV checks.")
+    parser.add_argument("--batch-size", type=int, default=5000, help="Batch size for staging loads.")
     parser.add_argument("--run-id", default=None, help="Optional future run_id.")
     parser.add_argument("--source-url", default=None, help="Optional source URL metadata.")
     parser.add_argument(
@@ -52,7 +54,7 @@ def main() -> None:
         action="store_true",
         help="Summarize CSV row counts by periodo_informacion with streaming reads.",
     )
-    parser.add_argument("--max-rows", type=int, default=10000, help="Maximum rows to profile in streaming mode.")
+    parser.add_argument("--max-rows", type=int, default=None, help="Maximum rows to scan in streaming CSV modes.")
     parser.add_argument(
         "--check-existing",
         action="store_true",
@@ -68,6 +70,11 @@ def main() -> None:
         action="store_true",
         help="Insert a run_manifest row when period_control exists.",
     )
+    parser.add_argument(
+        "--load-staging",
+        action="store_true",
+        help="Load one period into imss.imss_staging_asegurados using insert-only batches.",
+    )
     args = parser.parse_args()
 
     write_or_check_flags = [
@@ -77,12 +84,13 @@ def main() -> None:
         args.check_existing,
         args.register_period_control,
         args.register_run_manifest,
+        args.load_staging,
     ]
     if sum(bool(flag) for flag in write_or_check_flags) > 1:
         print(
             "Use only one of --check-source-csv, --profile-source-csv, "
-            "--summarize-source-periods, --check-existing, --register-period-control "
-            "or --register-run-manifest.",
+            "--summarize-source-periods, --check-existing, --register-period-control, "
+            "--register-run-manifest or --load-staging.",
             file=sys.stderr,
         )
         raise SystemExit(2)
@@ -117,7 +125,10 @@ def main() -> None:
             print("--profile-source-csv requires --source-csv.", file=sys.stderr)
             raise SystemExit(2)
         try:
-            result = profile_source_csv_streaming(args.source_csv, max_rows=args.max_rows)
+            result = profile_source_csv_streaming(
+                args.source_csv,
+                max_rows=args.max_rows if args.max_rows is not None else 10000,
+            )
         except Exception as error:
             print(f"Source CSV profile failed: {error}", file=sys.stderr)
             raise SystemExit(1) from error
@@ -174,8 +185,12 @@ def main() -> None:
         print("--register-run-manifest requires --run-id.", file=sys.stderr)
         raise SystemExit(2)
 
+    if args.load_staging and not args.source_csv:
+        print("--load-staging requires --source-csv.", file=sys.stderr)
+        raise SystemExit(2)
+
     config = PostgresConfig.from_env()
-    if args.check_existing or args.register_period_control or args.register_run_manifest:
+    if args.check_existing or args.register_period_control or args.register_run_manifest or args.load_staging:
         if not config.is_complete:
             print(
                 "PostgreSQL config is incomplete. Set IMSS_PG_HOST, IMSS_PG_PORT, "
@@ -197,6 +212,15 @@ def main() -> None:
                 )
             elif args.register_run_manifest:
                 result = register_run_manifest(connection, args.period, args.run_id)
+            elif args.load_staging:
+                result = load_staging_insert_only(
+                    connection,
+                    args.source_csv,
+                    args.period,
+                    batch_size=args.batch_size,
+                    max_rows=args.max_rows,
+                    run_id=args.run_id,
+                )
             else:
                 result = check_existing_period(connection, args.period)
         except PostgresDriverMissingError as error:
@@ -213,16 +237,34 @@ def main() -> None:
             "mode": (
                 "register_run_manifest"
                 if args.register_run_manifest
+                else "load_staging"
+                if args.load_staging
                 else "register_period_control"
                 if args.register_period_control
                 else "check_existing"
             ),
-            "opens_database_connection": True,
-            "writes_period_control_only": bool(args.register_period_control),
-            "writes_run_manifest_only": bool(args.register_run_manifest),
-            "touches_final_table": False,
-            "touches_staging_table": False,
-            "reads_source_csv": False,
+            "opens_database_connection": (
+                result["opens_database_connection"] if args.load_staging else True
+            ),
+            "writes_period_control_only": (
+                result["writes_period_control_only"]
+                if args.load_staging
+                else bool(args.register_period_control)
+            ),
+            "writes_run_manifest_only": (
+                result["writes_run_manifest_only"]
+                if args.load_staging
+                else bool(args.register_run_manifest)
+            ),
+            "touches_staging_table": (
+                result["touches_staging_table"] if args.load_staging else False
+            ),
+            "touches_final_table": (
+                result["touches_final_table"] if args.load_staging else False
+            ),
+            "reads_source_csv": result["reads_source_csv"] if args.load_staging else False,
+            "reads_full_csv": result["reads_full_csv"] if args.load_staging else False,
+            "loads_dataframe": result["loads_dataframe"] if args.load_staging else False,
             "postgres_config": config.masked(),
             "result": result,
         }
