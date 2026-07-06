@@ -1,0 +1,135 @@
+"""Insert-only PostgreSQL loader skeleton.
+
+This module defines future loader contracts without reading large CSV files or
+modifying a database. All operations are dry-run placeholders unless a future
+implementation replaces them deliberately.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+
+PERIOD_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+@dataclass(frozen=True)
+class LoaderStepResult:
+    """Dry-run result for one future loader step."""
+
+    step: str
+    status: str = "planned"
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+def _not_implemented_for_execute(step: str) -> None:
+    raise NotImplementedError(
+        f"{step} is currently a skeleton placeholder. Only dry-run planning is implemented."
+    )
+
+
+def validate_period(period: str) -> LoaderStepResult:
+    """Validate period format for future insert-only loads."""
+    if not isinstance(period, str) or not PERIOD_RE.match(period):
+        raise ValueError("period must be a string in YYYY-MM-DD format")
+    return LoaderStepResult("validate_period", details={"periodo_informacion": period})
+
+
+def validate_existing_period(period: str, *, dry_run: bool = True) -> LoaderStepResult:
+    """Plan the future check for existing period_control/final rows."""
+    validate_period(period)
+    if not dry_run:
+        _not_implemented_for_execute("validate_existing_period")
+    return LoaderStepResult(
+        "validate_existing_period",
+        details={
+            "periodo_informacion": period,
+            "mode": "insert_only",
+            "would_check": [
+                "imss.imss_period_control",
+                "imss.imss_hechos_asegurados",
+            ],
+        },
+    )
+
+
+def prepare_staging(period: str, source_path: str | Path | None = None, *, dry_run: bool = True) -> LoaderStepResult:
+    """Plan staging preparation without reading the source file."""
+    validate_period(period)
+    if not dry_run:
+        _not_implemented_for_execute("prepare_staging")
+    return LoaderStepResult(
+        "prepare_staging",
+        details={
+            "periodo_informacion": period,
+            "source_path": str(source_path) if source_path is not None else None,
+            "target_table": "imss.imss_staging_asegurados",
+            "reads_source_file": False,
+        },
+    )
+
+
+def promote_staging_to_final(period: str, *, dry_run: bool = True) -> LoaderStepResult:
+    """Plan insert-only promotion from staging to final table."""
+    validate_period(period)
+    if not dry_run:
+        _not_implemented_for_execute("promote_staging_to_final")
+    return LoaderStepResult(
+        "promote_staging_to_final",
+        details={
+            "periodo_informacion": period,
+            "mode": "insert_only",
+            "source_table": "imss.imss_staging_asegurados",
+            "target_table": "imss.imss_hechos_asegurados",
+            "disallowed": ["upsert_period", "full_refresh"],
+        },
+    )
+
+
+def register_period_control(period: str, *, dry_run: bool = True) -> LoaderStepResult:
+    """Plan period control registration for an insert-only load."""
+    validate_period(period)
+    if not dry_run:
+        _not_implemented_for_execute("register_period_control")
+    return LoaderStepResult(
+        "register_period_control",
+        details={
+            "periodo_informacion": period,
+            "target_table": "imss.imss_period_control",
+            "future_status": "loaded",
+        },
+    )
+
+
+def register_run_manifest(run_id: str | None = None, *, dry_run: bool = True) -> LoaderStepResult:
+    """Plan manifest registration in PostgreSQL JSONB."""
+    if not dry_run:
+        _not_implemented_for_execute("register_run_manifest")
+    return LoaderStepResult(
+        "register_run_manifest",
+        details={
+            "run_id": run_id,
+            "target_table": "imss.imss_run_manifest",
+            "stores_manifest_jsonb": True,
+        },
+    )
+
+
+def plan_insert_only_load(
+    period: str,
+    *,
+    source_path: str | Path | None = None,
+    run_id: str | None = None,
+) -> list[LoaderStepResult]:
+    """Return the planned steps for a future insert-only PostgreSQL load."""
+    return [
+        validate_period(period),
+        validate_existing_period(period),
+        prepare_staging(period, source_path),
+        promote_staging_to_final(period),
+        register_period_control(period),
+        register_run_manifest(run_id),
+    ]
