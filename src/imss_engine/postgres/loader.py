@@ -53,6 +53,92 @@ PROFILE_NUMERIC_COLUMNS = (
 )
 DISTINCT_COUNT_LIMIT = 10000
 SAMPLE_VALUES_LIMIT = 10
+STAGING_INSERT_COLUMNS = (
+    "run_id",
+    "periodo_informacion",
+    "cve_delegacion",
+    "cve_subdelegacion",
+    "cve_entidad",
+    "cve_municipio",
+    "tamaño_patron",
+    "sexo",
+    "rango_edad",
+    "rango_ingreso_vsm",
+    "rango_ingreso_uma",
+    "sector_economico_1",
+    "sector_economico_2",
+    "sector_economico_4",
+    "ptpd",
+    "asegurados",
+    "no_trabajadores",
+    "ta",
+    "ta_sal",
+    "tpu",
+    "tpc",
+    "teu",
+    "tec",
+    "tpu_sal",
+    "tpc_sal",
+    "teu_sal",
+    "tec_sal",
+    "masa_sal_ta",
+    "masa_sal_tpu",
+    "masa_sal_tpc",
+    "masa_sal_teu",
+    "masa_sal_tec",
+    "puestos_permanentes",
+    "puestos_eventuales",
+    "puestos_urbanos",
+    "puestos_campo",
+    "masa_sal_permanentes",
+    "masa_sal_eventuales",
+    "masa_sal_urbanos",
+    "masa_sal_campo",
+    "sbc_total",
+    "sbc_permanentes",
+    "sbc_eventuales",
+    "sbc_urbanos",
+    "sbc_campo",
+    "period_fingerprint_hash",
+    "source_url",
+    "loaded_at",
+    "created_at",
+)
+STAGING_NUMERIC_COLUMNS = {
+    "asegurados",
+    "no_trabajadores",
+    "ta",
+    "ta_sal",
+    "tpu",
+    "tpc",
+    "teu",
+    "tec",
+    "tpu_sal",
+    "tpc_sal",
+    "teu_sal",
+    "tec_sal",
+    "masa_sal_ta",
+    "masa_sal_tpu",
+    "masa_sal_tpc",
+    "masa_sal_teu",
+    "masa_sal_tec",
+    "puestos_permanentes",
+    "puestos_eventuales",
+    "puestos_urbanos",
+    "puestos_campo",
+    "masa_sal_permanentes",
+    "masa_sal_eventuales",
+    "masa_sal_urbanos",
+    "masa_sal_campo",
+    "sbc_total",
+    "sbc_permanentes",
+    "sbc_eventuales",
+    "sbc_urbanos",
+    "sbc_campo",
+}
+STAGING_SOURCE_ALIASES = {
+    "tamaño_patron": ("tamaño_patron", "tamaÃ±o_patron"),
+}
 
 
 @dataclass(frozen=True)
@@ -332,6 +418,207 @@ def summarize_source_csv_periods_streaming(
         "min_period": sorted_periods[0] if sorted_periods else None,
         "max_period": sorted_periods[-1] if sorted_periods else None,
         "rows_by_period": {period: rows_by_period[period] for period in sorted_periods},
+    }
+
+
+def _row_value(row: dict, column: str):
+    for source_column in STAGING_SOURCE_ALIASES.get(column, (column,)):
+        if source_column in row:
+            value = (row.get(source_column) or "").strip()
+            return value or None
+    return None
+
+
+def _staging_row_values(row: dict, run_id: str) -> tuple:
+    values = []
+    for column in STAGING_INSERT_COLUMNS:
+        if column == "run_id":
+            values.append(run_id)
+            continue
+        value = _row_value(row, column)
+        if column in STAGING_NUMERIC_COLUMNS and value is not None:
+            value = value.replace(",", "")
+        values.append(value)
+    return tuple(values)
+
+
+def _staging_count(cursor, period: str) -> int:
+    cursor.execute(
+        """
+        SELECT COUNT(*)
+        FROM imss.imss_staging_asegurados
+        WHERE periodo_informacion = %s;
+        """,
+        (period,),
+    )
+    return int(cursor.fetchone()[0])
+
+
+def load_staging_insert_only(
+    connection,
+    source_path: str | Path,
+    period: str,
+    batch_size: int = 5000,
+    max_rows: int | None = None,
+    run_id: str | None = None,
+) -> dict:
+    """Load one period from a CSV source into staging with insert-only semantics."""
+    validate_period(period)
+    if batch_size <= 0:
+        raise ValueError("batch_size must be greater than 0")
+    if max_rows is not None and max_rows <= 0:
+        raise ValueError("max_rows must be greater than 0 when provided")
+
+    source_check = check_source_csv(source_path, sample_rows=0)
+    header = source_check["header"]
+    if "periodo_informacion" not in set(header):
+        raise ValueError("source CSV must include periodo_informacion")
+
+    path = Path(source_path)
+    encoding = source_check["encoding"]
+    delimiter = source_check["delimiter"]
+    effective_run_id = run_id or f"staging_load_{period}"
+    committed = False
+    rolled_back = False
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT 1
+                FROM imss.imss_period_control
+                WHERE periodo_informacion = %s;
+                """,
+                (period,),
+            )
+            period_control_exists = cursor.fetchone() is not None
+            staging_row_count_before = _staging_count(cursor, period)
+
+            if not period_control_exists:
+                return {
+                    "periodo_informacion": period,
+                    "source_path": str(path),
+                    "file_size_bytes": source_check["file_size_bytes"],
+                    "encoding": encoding,
+                    "delimiter": delimiter,
+                    "batch_size": batch_size,
+                    "max_rows": max_rows,
+                    "rows_scanned": 0,
+                    "rows_matched_period": 0,
+                    "rows_inserted_staging": 0,
+                    "staging_row_count_before": staging_row_count_before,
+                    "staging_row_count_after": staging_row_count_before,
+                    "period_control_exists": False,
+                    "inserted": False,
+                    "reason": "missing_period_control",
+                    "committed": False,
+                    "rolled_back": False,
+                    "touches_staging_table": False,
+                    "touches_final_table": False,
+                    "writes_period_control_only": False,
+                    "writes_run_manifest_only": False,
+                    "opens_database_connection": True,
+                    "reads_source_csv": False,
+                    "reads_full_csv": False,
+                    "loads_dataframe": False,
+                }
+
+            if staging_row_count_before > 0:
+                return {
+                    "periodo_informacion": period,
+                    "source_path": str(path),
+                    "file_size_bytes": source_check["file_size_bytes"],
+                    "encoding": encoding,
+                    "delimiter": delimiter,
+                    "batch_size": batch_size,
+                    "max_rows": max_rows,
+                    "rows_scanned": 0,
+                    "rows_matched_period": 0,
+                    "rows_inserted_staging": 0,
+                    "staging_row_count_before": staging_row_count_before,
+                    "staging_row_count_after": staging_row_count_before,
+                    "period_control_exists": True,
+                    "inserted": False,
+                    "reason": "staging_period_already_exists",
+                    "committed": False,
+                    "rolled_back": False,
+                    "touches_staging_table": False,
+                    "touches_final_table": False,
+                    "writes_period_control_only": False,
+                    "writes_run_manifest_only": False,
+                    "opens_database_connection": True,
+                    "reads_source_csv": False,
+                    "reads_full_csv": False,
+                    "loads_dataframe": False,
+                }
+
+            quoted_columns = [
+                f'"{column}"' if column == "tamaño_patron" else column
+                for column in STAGING_INSERT_COLUMNS
+            ]
+            placeholders = ", ".join(["%s"] * len(STAGING_INSERT_COLUMNS))
+            insert_sql = (
+                f"INSERT INTO imss.imss_staging_asegurados "
+                f"({', '.join(quoted_columns)}) VALUES ({placeholders});"
+            )
+
+            rows_scanned = 0
+            rows_matched_period = 0
+            rows_inserted_staging = 0
+            batch = []
+            with path.open("r", encoding=encoding, newline="") as file:
+                reader = csv.DictReader(file, delimiter=delimiter)
+                for row in reader:
+                    if max_rows is not None and rows_scanned >= max_rows:
+                        break
+                    rows_scanned += 1
+                    if (row.get("periodo_informacion") or "").strip() != period:
+                        continue
+                    rows_matched_period += 1
+                    batch.append(_staging_row_values(row, effective_run_id))
+                    if len(batch) >= batch_size:
+                        cursor.executemany(insert_sql, batch)
+                        rows_inserted_staging += len(batch)
+                        batch = []
+
+                if batch:
+                    cursor.executemany(insert_sql, batch)
+                    rows_inserted_staging += len(batch)
+
+            staging_row_count_after = _staging_count(cursor, period)
+        connection.commit()
+        committed = True
+    except Exception:
+        connection.rollback()
+        rolled_back = True
+        raise
+
+    return {
+        "periodo_informacion": period,
+        "source_path": str(path),
+        "file_size_bytes": source_check["file_size_bytes"],
+        "encoding": encoding,
+        "delimiter": delimiter,
+        "batch_size": batch_size,
+        "max_rows": max_rows,
+        "rows_scanned": rows_scanned,
+        "rows_matched_period": rows_matched_period,
+        "rows_inserted_staging": rows_inserted_staging,
+        "staging_row_count_before": staging_row_count_before,
+        "staging_row_count_after": staging_row_count_after,
+        "period_control_exists": period_control_exists,
+        "inserted": rows_inserted_staging > 0,
+        "run_id": effective_run_id,
+        "committed": committed,
+        "rolled_back": rolled_back,
+        "touches_staging_table": True,
+        "touches_final_table": False,
+        "writes_period_control_only": False,
+        "writes_run_manifest_only": False,
+        "opens_database_connection": True,
+        "reads_source_csv": True,
+        "reads_full_csv": max_rows is None,
+        "loads_dataframe": False,
     }
 
 
