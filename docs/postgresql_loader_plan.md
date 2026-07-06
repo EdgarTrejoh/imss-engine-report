@@ -101,6 +101,18 @@ Este modo primero ejecuta el chequeo de periodo existente. Si el periodo ya exis
 
 El registro no lee el CSV concentrado, no carga hechos, no usa staging, no ejecuta DDL, no crea tablas, no usa upsert, no usa `ON CONFLICT DO UPDATE` y no sobrescribe periodos existentes.
 
+## Registro Inicial En Run Manifest
+
+Cuando el periodo ya existe en `imss.imss_period_control`, se puede registrar un manifest minimo en `imss.imss_run_manifest`:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_postgres_loader.py --period 2026-01-31 --register-run-manifest --run-id manual_manifest_20260131
+```
+
+Este modo valida que el periodo exista previamente en `period_control`. Si falta, no inserta nada y reporta `missing_period_control`. Si existe, inserta una sola fila en `imss.imss_run_manifest` con `run_mode = 'manifest_only'`, `status = 'pending'` y un `manifest_json` seguro.
+
+El registro no lee el CSV concentrado, no carga hechos, no usa staging, no modifica `period_control`, no usa upsert, no usa `ON CONFLICT DO UPDATE` y no sobrescribe manifests existentes.
+
 ## Smoke Test De Conexion
 
 Cuando exista un entorno local PostgreSQL configurado, se puede validar solo la conectividad con:

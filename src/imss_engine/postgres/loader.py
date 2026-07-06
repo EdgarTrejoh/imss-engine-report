@@ -8,6 +8,7 @@ implementation replaces them deliberately.
 from __future__ import annotations
 
 import re
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -233,10 +234,10 @@ def register_period_control(period: str, *, dry_run: bool = True) -> LoaderStepR
     )
 
 
-def register_run_manifest(run_id: str | None = None, *, dry_run: bool = True) -> LoaderStepResult:
+def plan_register_run_manifest(run_id: str | None = None, *, dry_run: bool = True) -> LoaderStepResult:
     """Plan manifest registration in PostgreSQL JSONB."""
     if not dry_run:
-        _not_implemented_for_execute("register_run_manifest")
+        _not_implemented_for_execute("plan_register_run_manifest")
     return LoaderStepResult(
         "register_run_manifest",
         details={
@@ -245,6 +246,107 @@ def register_run_manifest(run_id: str | None = None, *, dry_run: bool = True) ->
             "stores_manifest_jsonb": True,
         },
     )
+
+
+def register_run_manifest(
+    connection,
+    period: str,
+    run_id: str,
+    manifest: dict | None = None,
+) -> dict:
+    """Insert a run manifest row when period_control exists.
+
+    This function writes only to ``imss.imss_run_manifest`` and does not update
+    period control, staging or final facts.
+    """
+    validate_period(period)
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError("run_id is required for run_manifest registration")
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT 1
+            FROM imss.imss_period_control
+            WHERE periodo_informacion = %s;
+            """,
+            (period,),
+        )
+        period_control_exists = cursor.fetchone() is not None
+
+        cursor.execute(
+            """
+            SELECT 1
+            FROM imss.imss_run_manifest
+            WHERE run_id = %s;
+            """,
+            (run_id,),
+        )
+        manifest_exists = cursor.fetchone() is not None
+
+    if not period_control_exists:
+        return {
+            "periodo_informacion": period,
+            "run_id": run_id,
+            "inserted": False,
+            "recommended_status": "missing_period_control",
+            "writes_run_manifest_only": False,
+            "reason": "period does not exist in imss.imss_period_control",
+        }
+
+    if manifest_exists:
+        return {
+            "periodo_informacion": period,
+            "run_id": run_id,
+            "inserted": False,
+            "recommended_status": "manifest_already_exists",
+            "writes_run_manifest_only": False,
+            "reason": "run_id already exists in imss.imss_run_manifest",
+        }
+
+    manifest_payload = dict(manifest or {})
+    manifest_payload.update(
+        {
+            "periodo_informacion": period,
+            "run_id": run_id,
+            "mode": "manifest_only",
+            "reads_source_csv": False,
+            "touches_final_table": False,
+            "touches_staging_table": False,
+        }
+    )
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO imss.imss_run_manifest (
+                    run_id,
+                    run_mode,
+                    status,
+                    manifest_json
+                )
+                VALUES (
+                    %s,
+                    'manifest_only',
+                    'pending',
+                    CAST(%s AS jsonb)
+                );
+                """,
+                (run_id, json.dumps(manifest_payload, ensure_ascii=False, sort_keys=True)),
+            )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+    return {
+        "periodo_informacion": period,
+        "run_id": run_id,
+        "inserted": True,
+        "recommended_status": "run_manifest_registered",
+        "writes_run_manifest_only": True,
+    }
 
 
 def plan_insert_only_load(
@@ -260,5 +362,5 @@ def plan_insert_only_load(
         prepare_staging(period, source_path),
         promote_staging_to_final(period),
         register_period_control(period),
-        register_run_manifest(run_id),
+        plan_register_run_manifest(run_id),
     ]
