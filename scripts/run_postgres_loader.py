@@ -20,6 +20,7 @@ from src.imss_engine.postgres.loader import (
     profile_source_csv_streaming,
     register_period_control_pending,
     register_run_manifest,
+    summarize_source_csv_periods_streaming,
 )
 
 
@@ -46,6 +47,11 @@ def main() -> None:
         action="store_true",
         help="Profile a CSV with streaming reads and bounded row count.",
     )
+    parser.add_argument(
+        "--summarize-source-periods",
+        action="store_true",
+        help="Summarize CSV row counts by periodo_informacion with streaming reads.",
+    )
     parser.add_argument("--max-rows", type=int, default=10000, help="Maximum rows to profile in streaming mode.")
     parser.add_argument(
         "--check-existing",
@@ -67,14 +73,16 @@ def main() -> None:
     write_or_check_flags = [
         args.check_source_csv,
         args.profile_source_csv,
+        args.summarize_source_periods,
         args.check_existing,
         args.register_period_control,
         args.register_run_manifest,
     ]
     if sum(bool(flag) for flag in write_or_check_flags) > 1:
         print(
-            "Use only one of --check-source-csv, --profile-source-csv, --check-existing, "
-            "--register-period-control or --register-run-manifest.",
+            "Use only one of --check-source-csv, --profile-source-csv, "
+            "--summarize-source-periods, --check-existing, --register-period-control "
+            "or --register-run-manifest.",
             file=sys.stderr,
         )
         raise SystemExit(2)
@@ -129,8 +137,37 @@ def main() -> None:
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         return
 
+    if args.summarize_source_periods:
+        if not args.source_csv:
+            print("--summarize-source-periods requires --source-csv.", file=sys.stderr)
+            raise SystemExit(2)
+        try:
+            result = summarize_source_csv_periods_streaming(args.source_csv, max_rows=args.max_rows)
+        except Exception as error:
+            print(f"Source period summary failed: {error}", file=sys.stderr)
+            raise SystemExit(1) from error
+
+        payload = {
+            "mode": "summarize_source_periods",
+            "opens_database_connection": False,
+            "reads_source_csv": True,
+            "reads_full_csv": result["reads_full_csv"],
+            "loads_dataframe": False,
+            "writes_period_control_only": False,
+            "writes_run_manifest_only": False,
+            "touches_final_table": False,
+            "touches_staging_table": False,
+            "result": result,
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+
     if not args.period:
-        print("--period is required unless --check-source-csv or --profile-source-csv is used.", file=sys.stderr)
+        print(
+            "--period is required unless --check-source-csv, --profile-source-csv "
+            "or --summarize-source-periods is used.",
+            file=sys.stderr,
+        )
         raise SystemExit(2)
 
     if args.register_run_manifest and not args.run_id:
