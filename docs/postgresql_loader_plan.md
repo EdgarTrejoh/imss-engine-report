@@ -94,6 +94,16 @@ El siguiente pre-check perfila el CSV fuente fila por fila con un limite explici
 
 Este modo no requiere variables `IMSS_PG_*`, no conecta a PostgreSQL, no carga datos, no lee el CSV completo por defecto y no usa pandas. Recorre el archivo con lectura streaming hasta `--max-rows` y reporta layout, columnas criticas, dimensiones clave y metricas numericas basicas antes de cualquier staging.
 
+## Resumen Streaming Por Periodo Del CSV Fuente
+
+Para validar la distribucion de filas por `periodo_informacion` sin cargar datos, se puede ejecutar:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_postgres_loader.py --summarize-source-periods --source-csv .\data\processed\imss_concentrado.csv --max-rows 100000
+```
+
+Este modo no requiere variables `IMSS_PG_*`, no conecta a PostgreSQL, no crea tablas, no carga datos, no escribe archivos de salida y no usa pandas. Recorre el CSV fila por fila hasta `--max-rows` y reporta conteos por periodo, periodos distintos, periodos de muestra, minimo, maximo, filas con periodo vacio y si se alcanzo el limite de lectura.
+
 ## Chequeo De Periodo Existente
 
 El primer chequeo real del loader es solo de lectura. Permite validar si un periodo ya existe antes de una carga futura:

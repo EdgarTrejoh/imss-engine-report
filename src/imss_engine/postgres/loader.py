@@ -279,6 +279,62 @@ def profile_source_csv_streaming(source_path: str | Path, max_rows: int | None =
     }
 
 
+def summarize_source_csv_periods_streaming(
+    source_path: str | Path,
+    max_rows: int | None = None,
+) -> dict:
+    """Summarize source CSV row counts by period with streaming reads."""
+    if max_rows is not None and max_rows <= 0:
+        raise ValueError("max_rows must be greater than 0 when provided")
+
+    source_check = check_source_csv(source_path, sample_rows=0)
+    path = Path(source_path)
+    header = source_check["header"]
+    if "periodo_informacion" not in set(header):
+        raise ValueError("source CSV must include periodo_informacion")
+
+    delimiter = source_check["delimiter"]
+    encoding = source_check["encoding"]
+    rows_by_period: dict[str, int] = {}
+    empty_period_rows = 0
+    rows_scanned = 0
+    stopped_by_limit = False
+
+    with path.open("r", encoding=encoding, newline="") as file:
+        reader = csv.DictReader(file, delimiter=delimiter)
+        for row in reader:
+            rows_scanned += 1
+            period = (row.get("periodo_informacion") or "").strip()
+            if not period:
+                empty_period_rows += 1
+            else:
+                rows_by_period[period] = rows_by_period.get(period, 0) + 1
+            if max_rows is not None and rows_scanned >= max_rows:
+                stopped_by_limit = True
+                break
+
+    sorted_periods = sorted(rows_by_period)
+    return {
+        "source_path": str(path),
+        "file_size_bytes": source_check["file_size_bytes"],
+        "encoding": encoding,
+        "delimiter": delimiter,
+        "column_count": source_check["column_count"],
+        "rows_scanned": rows_scanned,
+        "max_rows": max_rows,
+        "reached_max_rows": stopped_by_limit,
+        "reads_full_csv": max_rows is None,
+        "loads_dataframe": False,
+        "opens_database_connection": False,
+        "empty_period_rows": empty_period_rows,
+        "distinct_period_count": len(rows_by_period),
+        "sample_periods": sorted_periods[:20],
+        "min_period": sorted_periods[0] if sorted_periods else None,
+        "max_period": sorted_periods[-1] if sorted_periods else None,
+        "rows_by_period": {period: rows_by_period[period] for period in sorted_periods},
+    }
+
+
 def check_existing_period(connection, period: str) -> dict:
     """Read PostgreSQL to determine whether a period already exists.
 
