@@ -56,6 +56,59 @@ def validate_existing_period(period: str, *, dry_run: bool = True) -> LoaderStep
     )
 
 
+def check_existing_period(connection, period: str) -> dict:
+    """Read PostgreSQL to determine whether a period already exists.
+
+    This is the first real loader check and is intentionally read-only. It only
+    executes SELECT statements against period control and final facts.
+    """
+    validate_period(period)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT status, row_count
+            FROM imss.imss_period_control
+            WHERE periodo_informacion = %s;
+            """,
+            (period,),
+        )
+        period_control_row = cursor.fetchone()
+
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS final_table_row_count
+            FROM imss.imss_hechos_asegurados
+            WHERE periodo_informacion = %s;
+            """,
+            (period,),
+        )
+        final_table_row_count = int(cursor.fetchone()[0])
+
+    period_control_exists = period_control_row is not None
+    period_control_status = period_control_row[0] if period_control_exists else None
+    period_control_row_count = period_control_row[1] if period_control_exists else None
+
+    if period_control_exists:
+        exists = True
+        recommended_status = "already_exists"
+    elif final_table_row_count > 0:
+        exists = True
+        recommended_status = "conflict_existing_final_rows_without_control"
+    else:
+        exists = False
+        recommended_status = "new_period"
+
+    return {
+        "periodo_informacion": period,
+        "period_control_exists": period_control_exists,
+        "period_control_status": period_control_status,
+        "period_control_row_count": period_control_row_count,
+        "final_table_row_count": final_table_row_count,
+        "exists": exists,
+        "recommended_status": recommended_status,
+    }
+
+
 def prepare_staging(period: str, source_path: str | Path | None = None, *, dry_run: bool = True) -> LoaderStepResult:
     """Plan staging preparation without reading the source file."""
     validate_period(period)
