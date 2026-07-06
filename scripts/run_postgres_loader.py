@@ -13,8 +13,12 @@ from src.imss_engine.postgres.connection import (
     PostgresDriverMissingError,
     connect,
 )
-from src.imss_engine.postgres.loader import check_existing_period, plan_insert_only_load
-from src.imss_engine.postgres.loader import register_period_control_pending
+from src.imss_engine.postgres.loader import (
+    check_existing_period,
+    plan_insert_only_load,
+    register_period_control_pending,
+    register_run_manifest,
+)
 
 
 def main() -> None:
@@ -39,17 +43,31 @@ def main() -> None:
         action="store_true",
         help="Insert a pending period_control row when the period is new.",
     )
+    parser.add_argument(
+        "--register-run-manifest",
+        action="store_true",
+        help="Insert a run_manifest row when period_control exists.",
+    )
     args = parser.parse_args()
 
-    if args.check_existing and args.register_period_control:
+    write_or_check_flags = [
+        args.check_existing,
+        args.register_period_control,
+        args.register_run_manifest,
+    ]
+    if sum(bool(flag) for flag in write_or_check_flags) > 1:
         print(
-            "Use either --check-existing or --register-period-control, not both.",
+            "Use only one of --check-existing, --register-period-control or --register-run-manifest.",
             file=sys.stderr,
         )
         raise SystemExit(2)
 
+    if args.register_run_manifest and not args.run_id:
+        print("--register-run-manifest requires --run-id.", file=sys.stderr)
+        raise SystemExit(2)
+
     config = PostgresConfig.from_env()
-    if args.check_existing or args.register_period_control:
+    if args.check_existing or args.register_period_control or args.register_run_manifest:
         if not config.is_complete:
             print(
                 "PostgreSQL config is incomplete. Set IMSS_PG_HOST, IMSS_PG_PORT, "
@@ -62,30 +80,38 @@ def main() -> None:
         connection = None
         try:
             connection = connect(config)
-            result = (
-                register_period_control_pending(
+            if args.register_period_control:
+                result = register_period_control_pending(
                     connection,
                     args.period,
                     run_id=args.run_id,
                     source_url=args.source_url,
                 )
-                if args.register_period_control
-                else check_existing_period(connection, args.period)
-            )
+            elif args.register_run_manifest:
+                result = register_run_manifest(connection, args.period, args.run_id)
+            else:
+                result = check_existing_period(connection, args.period)
         except PostgresDriverMissingError as error:
             print(f"PostgreSQL driver missing: {error}", file=sys.stderr)
             raise SystemExit(2) from error
         except Exception as error:
-            print(f"PostgreSQL period check failed: {error}", file=sys.stderr)
+            print(f"PostgreSQL loader operation failed: {error}", file=sys.stderr)
             raise SystemExit(1) from error
         finally:
             if connection is not None:
                 connection.close()
 
         payload = {
-            "mode": "register_period_control" if args.register_period_control else "check_existing",
+            "mode": (
+                "register_run_manifest"
+                if args.register_run_manifest
+                else "register_period_control"
+                if args.register_period_control
+                else "check_existing"
+            ),
             "opens_database_connection": True,
             "writes_period_control_only": bool(args.register_period_control),
+            "writes_run_manifest_only": bool(args.register_run_manifest),
             "touches_final_table": False,
             "touches_staging_table": False,
             "reads_source_csv": False,
