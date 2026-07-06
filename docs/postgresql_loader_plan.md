@@ -73,3 +73,19 @@ python scripts/run_postgres_loader.py --period 2026-01-31
 ```
 
 El comando imprime el plan de pasos futuro, no abre conexion y no lee archivos de datos.
+
+## Smoke Test De Conexion
+
+Cuando exista un entorno local PostgreSQL configurado, se puede validar solo la conectividad con:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\check_postgres_connection.py
+```
+
+El script lee las variables `IMSS_PG_*`, abre una conexion, ejecuta unicamente:
+
+```sql
+SELECT current_database(), current_schema();
+```
+
+Despues cierra la conexion. No crea tablas, no ejecuta DDL, no lee el CSV concentrado, no carga datos y no imprime la password.
