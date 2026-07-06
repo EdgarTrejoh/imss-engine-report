@@ -155,6 +155,26 @@ Este modo requiere que el periodo exista previamente en `imss.imss_period_contro
 
 La carga staging no toca `imss.imss_hechos_asegurados`, no modifica `period_control`, no modifica `run_manifest`, no usa pandas, no carga DataFrame, no usa upsert, no usa `ON CONFLICT DO UPDATE`, no ejecuta `UPDATE`, no ejecuta `DELETE`, no ejecuta `TRUNCATE` y no implementa `full_refresh`.
 
+## Promocion Insert-Only De Staging A Final
+
+Cuando un periodo ya fue cargado y validado en `imss.imss_staging_asegurados`, se puede promover de forma controlada hacia `imss.imss_hechos_asegurados`:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_postgres_loader.py --promote-staging-final --period 2026-01-31 --batch-size 50000
+```
+
+Este modo no lee CSV, no usa pandas, no carga DataFrame y no limpia `data/processed/imss_concentrado.csv`. El housekeeping del CSV fuente queda como paso posterior, despues de validar que la tabla final contiene el periodo esperado.
+
+La promocion requiere que:
+
+- el periodo exista en `imss.imss_period_control`;
+- existan filas del periodo en `imss.imss_staging_asegurados`;
+- no existan filas previas del periodo en `imss.imss_hechos_asegurados`.
+
+La promocion es insert-only. Inserta desde staging hacia final filtrando `periodo_informacion`, no modifica staging, no modifica `period_control`, no modifica `run_manifest`, no usa upsert, no usa `ON CONFLICT DO UPDATE`, no ejecuta `UPDATE`, no ejecuta `DELETE`, no ejecuta `TRUNCATE` y no implementa `full_refresh`.
+
+Tratamiento de `ptpd`: si `staging.ptpd` viene `NULL` o vacio, se mapea a `no_disponible`. Este valor es compatible con la constraint vigente `chk_imss_hechos_ptpd`, que permite `0`, `1`, `no_disponible` y `no_aplica`. No se convierte `ptpd` vacio a `0`.
+
 ## Smoke Test De Conexion
 
 Cuando exista un entorno local PostgreSQL configurado, se puede validar solo la conectividad con:
