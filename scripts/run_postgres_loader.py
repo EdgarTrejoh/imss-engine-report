@@ -23,12 +23,13 @@ from src.imss_engine.postgres.loader import (
     register_period_control_pending,
     register_run_manifest,
     summarize_source_csv_periods_streaming,
+    validate_post_promotion_period,
 )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Dry-run skeleton for the future IMSS PostgreSQL insert-only loader."
+        description="Operational CLI for the IMSS PostgreSQL insert-only loader."
     )
     parser.add_argument("--period", help="Period to plan, in YYYY-MM-DD format.")
     parser.add_argument(
@@ -81,6 +82,11 @@ def main() -> None:
         action="store_true",
         help="Promote one staged period into imss.imss_hechos_asegurados using insert-only batches.",
     )
+    parser.add_argument(
+        "--validate-post-promotion",
+        action="store_true",
+        help="Validate staging and final consistency for one promoted period with read-only checks.",
+    )
     args = parser.parse_args()
 
     write_or_check_flags = [
@@ -92,12 +98,14 @@ def main() -> None:
         args.register_run_manifest,
         args.load_staging,
         args.promote_staging_final,
+        args.validate_post_promotion,
     ]
     if sum(bool(flag) for flag in write_or_check_flags) > 1:
         print(
             "Use only one of --check-source-csv, --profile-source-csv, "
             "--summarize-source-periods, --check-existing, --register-period-control, "
-            "--register-run-manifest, --load-staging or --promote-staging-final.",
+            "--register-run-manifest, --load-staging, --promote-staging-final "
+            "or --validate-post-promotion.",
             file=sys.stderr,
         )
         raise SystemExit(2)
@@ -203,6 +211,7 @@ def main() -> None:
         or args.register_run_manifest
         or args.load_staging
         or args.promote_staging_final
+        or args.validate_post_promotion
     ):
         if not config.is_complete:
             print(
@@ -241,6 +250,8 @@ def main() -> None:
                     run_id=args.run_id,
                     batch_size=args.batch_size,
                 )
+            elif args.validate_post_promotion:
+                result = validate_post_promotion_period(connection, args.period)
             else:
                 result = check_existing_period(connection, args.period)
         except PostgresDriverMissingError as error:
@@ -253,12 +264,19 @@ def main() -> None:
             if connection is not None:
                 connection.close()
 
+        uses_result_flags = (
+            args.load_staging
+            or args.promote_staging_final
+            or args.validate_post_promotion
+        )
         payload = {
             "mode": (
                 "register_run_manifest"
                 if args.register_run_manifest
                 else "promote_staging_final"
                 if args.promote_staging_final
+                else "validate_post_promotion"
+                if args.validate_post_promotion
                 else "load_staging"
                 if args.load_staging
                 else "register_period_control"
@@ -266,44 +284,32 @@ def main() -> None:
                 else "check_existing"
             ),
             "opens_database_connection": (
-                result["opens_database_connection"]
-                if args.load_staging or args.promote_staging_final
-                else True
+                result["opens_database_connection"] if uses_result_flags else True
             ),
             "writes_period_control_only": (
                 result["writes_period_control_only"]
-                if args.load_staging or args.promote_staging_final
+                if uses_result_flags
                 else bool(args.register_period_control)
             ),
             "writes_run_manifest_only": (
                 result["writes_run_manifest_only"]
-                if args.load_staging or args.promote_staging_final
+                if uses_result_flags
                 else bool(args.register_run_manifest)
             ),
             "touches_staging_table": (
-                result["touches_staging_table"]
-                if args.load_staging or args.promote_staging_final
-                else False
+                result["touches_staging_table"] if uses_result_flags else False
             ),
             "touches_final_table": (
-                result["touches_final_table"]
-                if args.load_staging or args.promote_staging_final
-                else False
+                result["touches_final_table"] if uses_result_flags else False
             ),
             "reads_source_csv": (
-                result["reads_source_csv"]
-                if args.load_staging or args.promote_staging_final
-                else False
+                result["reads_source_csv"] if uses_result_flags else False
             ),
             "reads_full_csv": (
-                result["reads_full_csv"]
-                if args.load_staging or args.promote_staging_final
-                else False
+                result["reads_full_csv"] if uses_result_flags else False
             ),
             "loads_dataframe": (
-                result["loads_dataframe"]
-                if args.load_staging or args.promote_staging_final
-                else False
+                result["loads_dataframe"] if uses_result_flags else False
             ),
             "postgres_config": config.masked(),
             "result": result,
