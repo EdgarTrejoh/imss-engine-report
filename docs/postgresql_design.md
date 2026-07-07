@@ -32,6 +32,8 @@ El objetivo es preparar una carga futura desde `data/processed/imss_concentrado.
 
 Tabla historica final. Conserva dimensiones, metricas, datos derivados y metadatos de linaje.
 
+Es la capa curada para consulta analitica y debe operar como historico acumulativo por periodo. La promocion desde staging debe ser insert-only: si un periodo ya existe en final, no se debe promover otra vez de forma automatica.
+
 Las dimensiones de la llave analitica son `NOT NULL`. Para campos historicamente no disponibles se deben usar valores tecnicos controlados como:
 
 - `no_disponible`
@@ -46,6 +48,12 @@ Tabla de staging. Tiene columnas equivalentes a la final y agrega:
 - `staging_loaded_at`
 
 La staging permite mayor flexibilidad para validar antes de promover a la tabla final.
+
+Operativamente, staging funciona como landing normalizado y evidencia tecnica de carga. Debe conservarse como tabla acumulativa por periodo para conciliacion, auditoria y reproceso controlado. No debe borrarse automaticamente despues de promover datos a final.
+
+Si un periodo ya existe en staging, la carga normal debe rechazarse. Cualquier reproceso debe tratarse como flujo explicito de correccion y no como overwrite automatico.
+
+El CSV fuente `data/processed/imss_concentrado.csv` no debe limpiarse ni modificarse como parte de staging ni de la promocion a final. La depuracion del CSV fuente corresponde a una etapa posterior de housekeeping auditable con archivo original o archivado, archivo resultante, conteos, periodos conservados/excluidos, hashes y manifest.
 
 ### `imss.imss_period_control`
 
