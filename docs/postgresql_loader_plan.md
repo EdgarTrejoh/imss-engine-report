@@ -82,6 +82,8 @@ La depuracion del CSV fuente queda para una etapa posterior de housekeeping audi
 - hashes;
 - manifest de la operacion.
 
+El diseno operativo de esa etapa esta documentado en `docs/source_csv_housekeeping_plan.md`. Ese plan es posterior: no implementa limpieza del CSV, no autoriza sobrescrituras sin snapshot y no debe mezclarse con carga a staging ni promocion a final.
+
 ## Flujo Operativo Recomendado
 
 El flujo objetivo debe avanzar por pasos verificables:
