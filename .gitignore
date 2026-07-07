@@ -37,6 +37,7 @@ resumen_valores_unicos.csv
 # Artefactos locales comunes
 .ipynb_checkpoints/
 *.log
+outputs/
 
 # Variables de entorno / secretos futuros
 .env

@@ -25,6 +25,7 @@ from src.imss_engine.postgres.loader import (
     profile_source_csv_streaming,
     register_period_control_pending,
     register_run_manifest,
+    summarize_reserved_periods,
     summarize_source_csv_periods_streaming,
     validate_post_promotion_period,
 )
@@ -105,6 +106,11 @@ def main() -> None:
         action="store_true",
         help="Run a read-only eligibility check for future source CSV housekeeping.",
     )
+    parser.add_argument(
+        "--summary-reserved-periods",
+        action="store_true",
+        help="Return a compact read-only summary of periods preserved in final facts.",
+    )
     args = parser.parse_args()
 
     write_or_check_flags = [
@@ -120,6 +126,7 @@ def main() -> None:
         args.finalize_period_control,
         args.finalize_run_manifest,
         args.check_housekeeping_eligibility,
+        args.summary_reserved_periods,
     ]
     if sum(bool(flag) for flag in write_or_check_flags) > 1:
         print(
@@ -127,7 +134,8 @@ def main() -> None:
             "--summarize-source-periods, --check-existing, --register-period-control, "
             "--register-run-manifest, --load-staging, --promote-staging-final, "
             "--validate-post-promotion, --finalize-period-control or "
-            "--finalize-run-manifest, or --check-housekeeping-eligibility.",
+            "--finalize-run-manifest, --check-housekeeping-eligibility or "
+            "--summary-reserved-periods.",
             file=sys.stderr,
         )
         raise SystemExit(2)
@@ -214,10 +222,11 @@ def main() -> None:
         print("--check-housekeeping-eligibility requires --source-csv.", file=sys.stderr)
         raise SystemExit(2)
 
-    if not args.period and not args.check_housekeeping_eligibility:
+    if not args.period and not args.check_housekeeping_eligibility and not args.summary_reserved_periods:
         print(
             "--period is required unless --check-source-csv, --profile-source-csv "
-            "--summarize-source-periods or --check-housekeeping-eligibility is used.",
+            "--summarize-source-periods, --check-housekeeping-eligibility or "
+            "--summary-reserved-periods is used.",
             file=sys.stderr,
         )
         raise SystemExit(2)
@@ -245,6 +254,7 @@ def main() -> None:
         or args.finalize_period_control
         or args.finalize_run_manifest
         or args.check_housekeeping_eligibility
+        or args.summary_reserved_periods
     ):
         if not config.is_complete:
             print(
@@ -303,6 +313,8 @@ def main() -> None:
                     args.source_csv,
                     period=args.period,
                 )
+            elif args.summary_reserved_periods:
+                result = summarize_reserved_periods(connection, period=args.period)
             else:
                 result = check_existing_period(connection, args.period)
         except PostgresDriverMissingError as error:
@@ -322,10 +334,13 @@ def main() -> None:
             or args.finalize_period_control
             or args.finalize_run_manifest
             or args.check_housekeeping_eligibility
+            or args.summary_reserved_periods
         )
         payload = {
             "mode": (
-                "check_housekeeping_eligibility"
+                "summary_reserved_periods"
+                if args.summary_reserved_periods
+                else "check_housekeeping_eligibility"
                 if args.check_housekeeping_eligibility
                 else "register_run_manifest"
                 if args.register_run_manifest

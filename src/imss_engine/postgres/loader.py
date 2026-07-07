@@ -797,6 +797,64 @@ def check_housekeeping_eligibility(
     }
 
 
+def summarize_reserved_periods(connection, period: str | None = None) -> dict:
+    """Summarize periods already preserved in final facts with read-only SQL."""
+    if period is not None:
+        validate_period(period)
+
+    sql = """
+        SELECT
+            periodo_informacion,
+            COUNT(*) AS final_row_count,
+            COALESCE(SUM(ta), 0) AS sum_ta,
+            COALESCE(SUM(ta_sal), 0) AS sum_ta_sal,
+            COALESCE(SUM(masa_sal_ta), 0) AS sum_masa_sal_ta,
+            CASE
+                WHEN COALESCE(SUM(ta_sal), 0) = 0 THEN NULL
+                ELSE COALESCE(SUM(masa_sal_ta), 0) / SUM(ta_sal)
+            END AS sbc_promedio
+        FROM imss.imss_hechos_asegurados
+    """
+    params: tuple[Any, ...] = ()
+    if period is not None:
+        sql += " WHERE periodo_informacion = %s"
+        params = (period,)
+    sql += " GROUP BY periodo_informacion ORDER BY periodo_informacion;"
+
+    rows = []
+    with connection.cursor() as cursor:
+        cursor.execute(sql, params)
+        for row in cursor.fetchall():
+            rows.append(
+                {
+                    "periodo_informacion": str(row[0]),
+                    "final_row_count": int(row[1]),
+                    "asegurados_total_sum_ta": _numeric_for_json(row[2]),
+                    "trabajadores_con_sbc_sum_ta_sal": _numeric_for_json(row[3]),
+                    "masa_salarial_sum_masa_sal_ta": _numeric_for_json(row[4]),
+                    "sbc_promedio": _numeric_for_json(row[5]),
+                }
+            )
+
+    return {
+        "mode": "summary_reserved_periods",
+        "period_filter": period,
+        "period_count": len(rows),
+        "periods": rows,
+        "reads_source_csv": False,
+        "reads_full_csv": False,
+        "loads_dataframe": False,
+        "opens_database_connection": True,
+        "touches_staging_table": False,
+        "touches_final_table": False,
+        "writes_period_control_only": False,
+        "writes_run_manifest_only": False,
+        "writes_source_csv": False,
+        "archives_source_csv": False,
+        "creates_output_csv": False,
+    }
+
+
 def _pg_column(column: str) -> str:
     return f'"{column}"' if column == TAMANO_PATRON_COLUMN else column
 
