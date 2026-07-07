@@ -4,7 +4,7 @@
 
 Este documento describe el flujo operativo actual y objetivo del loader PostgreSQL IMSS.
 
-El proyecto ya cuenta con modos controlados de inspeccion de CSV, registro de periodo, manifest inicial, carga insert-only a staging, promocion insert-only de staging a final, validacion post-promocion, finalizacion formal de periodo en `period_control` y manifest final de corrida. La etapa de housekeeping auditable sigue documentada como trabajo posterior.
+El proyecto ya cuenta con modos controlados de inspeccion de CSV, registro de periodo, manifest inicial, carga insert-only a staging, promocion insert-only de staging a final, validacion post-promocion, finalizacion formal de periodo en `period_control`, manifest final de corrida y pre-check de elegibilidad para housekeeping. La etapa de housekeeping auditable sigue documentada como trabajo posterior.
 
 ## Componentes Creados
 
@@ -38,7 +38,7 @@ El loader debe conservar este orden operativo:
 6. Registrar resultado en `imss.imss_period_control`.
 7. Registrar manifest en `imss.imss_run_manifest`.
 
-Pasos ya implementados como modos controlados: inspeccion de CSV, perfilado streaming, resumen por periodo, chequeo de periodo existente, registro inicial en `period_control`, registro inicial en `run_manifest`, carga insert-only a staging, promocion insert-only a final, validacion post-promocion, finalizacion formal de periodo y manifest final de corrida.
+Pasos ya implementados como modos controlados: inspeccion de CSV, perfilado streaming, resumen por periodo, chequeo de periodo existente, registro inicial en `period_control`, registro inicial en `run_manifest`, carga insert-only a staging, promocion insert-only a final, validacion post-promocion, finalizacion formal de periodo, manifest final de corrida y pre-check de elegibilidad para housekeeping.
 
 Pasos posteriores: housekeeping auditable del CSV fuente.
 
@@ -98,9 +98,10 @@ El flujo objetivo debe avanzar por pasos verificables:
 8. Validar final.
 9. `finalize-period-control`.
 10. `finalize-run-manifest`.
-11. Ejecutar housekeeping auditable del CSV fuente en una etapa posterior.
+11. `check-housekeeping-eligibility`.
+12. Ejecutar housekeeping auditable del CSV fuente en una etapa posterior.
 
-Actualmente no todos estos pasos estan implementados como funciones ejecutables. El paso de housekeeping auditable queda como etapa posterior.
+Actualmente no todos estos pasos estan implementados como funciones ejecutables. El pre-check de elegibilidad ya existe, pero el housekeeping auditable queda como etapa posterior.
 
 ## Reglas De Negocio Que Debe Respetar
 
@@ -287,6 +288,18 @@ Este modo actualiza unicamente `imss.imss_run_manifest` para el `run_id` existen
 La finalizacion del manifest requiere que la validacion post-promocion pase y que `imss.imss_period_control.status = 'loaded'`. Si el manifest ya esta `completed`, responde idempotentemente sin volver a actualizar. Si el manifest tiene un periodo distinto en `manifest_json`, no actualiza.
 
 Este modo no modifica `period_control`, no modifica staging, no modifica final, no modifica el CSV, no implementa housekeeping y no calcula `config_hash_sha256` todavia.
+
+## Pre-Check De Elegibilidad Para Housekeeping
+
+Antes de implementar housekeeping real del CSV fuente, se puede ejecutar un diagnostico de solo lectura:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_postgres_loader.py --check-housekeeping-eligibility --period 2026-01-31 --source-csv .\data\processed\imss_concentrado.csv
+```
+
+Este modo lee `imss_concentrado.csv` por streaming para detectar periodos y contar filas, y consulta PostgreSQL solo con `SELECT`. Evalua si el periodo existe en staging y final, si los conteos y agregados principales cuadran, si `period_control` esta `loaded` y si existe un manifest final `completed` con `run_mode = final_manifest`.
+
+El resultado incluye `eligible_for_housekeeping` y `action_taken = "none"`. Este modo no modifica el CSV fuente, no crea archivos de salida, no archiva evidencia, no modifica staging, no modifica final, no actualiza `period_control`, no escribe `run_manifest`, no usa pandas y no carga DataFrame. El housekeeping auditable sigue siendo una etapa posterior.
 
 ## Smoke Test De Conexion
 

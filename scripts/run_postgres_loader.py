@@ -14,6 +14,7 @@ from src.imss_engine.postgres.connection import (
     connect,
 )
 from src.imss_engine.postgres.loader import (
+    check_housekeeping_eligibility,
     check_existing_period,
     check_source_csv,
     finalize_period_control_loaded,
@@ -99,6 +100,11 @@ def main() -> None:
         action="store_true",
         help="Mark an existing pending run manifest as completed.",
     )
+    parser.add_argument(
+        "--check-housekeeping-eligibility",
+        action="store_true",
+        help="Run a read-only eligibility check for future source CSV housekeeping.",
+    )
     args = parser.parse_args()
 
     write_or_check_flags = [
@@ -113,6 +119,7 @@ def main() -> None:
         args.validate_post_promotion,
         args.finalize_period_control,
         args.finalize_run_manifest,
+        args.check_housekeeping_eligibility,
     ]
     if sum(bool(flag) for flag in write_or_check_flags) > 1:
         print(
@@ -120,7 +127,7 @@ def main() -> None:
             "--summarize-source-periods, --check-existing, --register-period-control, "
             "--register-run-manifest, --load-staging, --promote-staging-final, "
             "--validate-post-promotion, --finalize-period-control or "
-            "--finalize-run-manifest.",
+            "--finalize-run-manifest, or --check-housekeeping-eligibility.",
             file=sys.stderr,
         )
         raise SystemExit(2)
@@ -203,10 +210,14 @@ def main() -> None:
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         return
 
-    if not args.period:
+    if args.check_housekeeping_eligibility and not args.source_csv:
+        print("--check-housekeeping-eligibility requires --source-csv.", file=sys.stderr)
+        raise SystemExit(2)
+
+    if not args.period and not args.check_housekeeping_eligibility:
         print(
             "--period is required unless --check-source-csv, --profile-source-csv "
-            "or --summarize-source-periods is used.",
+            "--summarize-source-periods or --check-housekeeping-eligibility is used.",
             file=sys.stderr,
         )
         raise SystemExit(2)
@@ -233,6 +244,7 @@ def main() -> None:
         or args.validate_post_promotion
         or args.finalize_period_control
         or args.finalize_run_manifest
+        or args.check_housekeeping_eligibility
     ):
         if not config.is_complete:
             print(
@@ -285,6 +297,12 @@ def main() -> None:
                     args.period,
                     args.run_id,
                 )
+            elif args.check_housekeeping_eligibility:
+                result = check_housekeeping_eligibility(
+                    connection,
+                    args.source_csv,
+                    period=args.period,
+                )
             else:
                 result = check_existing_period(connection, args.period)
         except PostgresDriverMissingError as error:
@@ -303,10 +321,13 @@ def main() -> None:
             or args.validate_post_promotion
             or args.finalize_period_control
             or args.finalize_run_manifest
+            or args.check_housekeeping_eligibility
         )
         payload = {
             "mode": (
-                "register_run_manifest"
+                "check_housekeeping_eligibility"
+                if args.check_housekeeping_eligibility
+                else "register_run_manifest"
                 if args.register_run_manifest
                 else "promote_staging_final"
                 if args.promote_staging_final
@@ -349,6 +370,15 @@ def main() -> None:
             ),
             "loads_dataframe": (
                 result["loads_dataframe"] if uses_result_flags else False
+            ),
+            "writes_source_csv": (
+                result.get("writes_source_csv", False) if uses_result_flags else False
+            ),
+            "archives_source_csv": (
+                result.get("archives_source_csv", False) if uses_result_flags else False
+            ),
+            "creates_output_csv": (
+                result.get("creates_output_csv", False) if uses_result_flags else False
             ),
             "postgres_config": config.masked(),
             "result": result,

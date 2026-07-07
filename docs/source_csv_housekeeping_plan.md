@@ -6,6 +6,8 @@ Este documento describe un diseno propuesto para housekeeping auditable de `data
 
 El housekeeping todavia no esta implementado. No existe aun un comando operativo para limpiar, reescribir o archivar el CSV fuente. Este plan no autoriza cambios destructivos sobre el archivo.
 
+Existe un pre-check de elegibilidad de solo lectura para diagnosticar si un periodo podria ser candidato a housekeeping futuro. Ese pre-check no modifica `imss_concentrado.csv`, no crea un CSV nuevo, no archiva archivos y no escribe en PostgreSQL.
+
 ## Proposito
 
 `data/processed/imss_concentrado.csv` es un archivo operativo grande. El proyecto busca recabar y procesar hasta 10 anos de informacion IMSS, por lo que mantener periodos ya cerrados dentro del CSV operativo puede volver costoso el manejo local.
@@ -49,6 +51,26 @@ Este flujo es diseno, no implementacion actual:
 10. Validar hashes.
 11. Conservar el manifest junto con la evidencia.
 12. No tocar PostgreSQL durante este housekeeping, salvo lecturas de control cuando exista implementacion formal.
+
+## Pre-Check De Elegibilidad Implementado
+
+El modo `--check-housekeeping-eligibility` permite revisar evidencia antes de implementar housekeeping real:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_postgres_loader.py --check-housekeeping-eligibility --period 2026-01-31 --source-csv .\data\processed\imss_concentrado.csv
+```
+
+Este modo:
+
+- lee el CSV fuente por streaming para detectar periodos y contar filas;
+- puede evaluar todos los periodos detectados o solo el periodo informado con `--period`;
+- consulta PostgreSQL solo con `SELECT`;
+- compara existencia, conteos y agregados entre staging y final;
+- valida que `period_control.status = loaded`;
+- valida que exista un manifest final `completed` con `run_mode = final_manifest`;
+- devuelve `action_taken = "none"`.
+
+Este modo no implementa housekeeping. No limpia, no reescribe, no archiva y no calcula hashes del CSV operativo.
 
 ## Criterios Para Excluir Un Periodo
 
