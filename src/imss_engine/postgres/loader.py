@@ -1133,6 +1133,185 @@ def finalize_period_control_loaded(
     }
 
 
+def _manifest_period(manifest_json) -> str | None:
+    if isinstance(manifest_json, dict):
+        value = manifest_json.get("periodo_informacion")
+        return str(value) if value is not None else None
+    if isinstance(manifest_json, str):
+        try:
+            manifest = json.loads(manifest_json)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(manifest, dict):
+            value = manifest.get("periodo_informacion")
+            return str(value) if value is not None else None
+    return None
+
+
+def finalize_run_manifest(connection, period: str, run_id: str) -> dict:
+    """Mark an existing pending run manifest as completed."""
+    validate_period(period)
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError("run_id is required for final run manifest")
+
+    validation = validate_post_promotion_period(connection, period)
+    base_result = {
+        "periodo_informacion": period,
+        "run_id": run_id,
+        "finalized": False,
+        "status_before": None,
+        "status_after": None,
+        "run_mode_before": None,
+        "run_mode_after": None,
+        "period_control_status": validation["period_control_status"],
+        "validation_status": validation["validation_status"],
+        "row_count": validation["final_row_count"],
+        "sum_ta": validation["final_sum_ta"],
+        "sum_ta_sal": validation["final_sum_ta_sal"],
+        "sum_masa_sal_ta": validation["final_sum_masa_sal_ta"],
+        "started_at_updated": False,
+        "finished_at_updated": False,
+        "validation": validation,
+        "reads_source_csv": False,
+        "reads_full_csv": False,
+        "loads_dataframe": False,
+        "opens_database_connection": True,
+        "touches_staging_table": False,
+        "touches_final_table": False,
+        "writes_period_control_only": False,
+        "writes_run_manifest_only": False,
+    }
+
+    if not validation["period_control_exists"]:
+        return {**base_result, "reason": "missing_period_control"}
+    if validation["validation_status"] != "passed":
+        return {**base_result, "reason": "post_promotion_validation_failed"}
+    if validation["period_control_status"] != "loaded":
+        return {
+            **base_result,
+            "reason": "period_not_loaded",
+            "period_control_status": validation["period_control_status"],
+        }
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT run_mode, status, manifest_json, started_at, created_at
+            FROM imss.imss_run_manifest
+            WHERE run_id = %s;
+            """,
+            (run_id,),
+        )
+        manifest_row = cursor.fetchone()
+
+    if manifest_row is None:
+        return {**base_result, "reason": "missing_run_manifest"}
+
+    run_mode_before, status_before, previous_manifest_json, started_at, created_at = manifest_row
+    manifest_period = _manifest_period(previous_manifest_json)
+    result_with_manifest = {
+        **base_result,
+        "status_before": status_before,
+        "status_after": status_before,
+        "run_mode_before": run_mode_before,
+        "run_mode_after": run_mode_before,
+    }
+
+    if status_before == "completed":
+        return {
+            **result_with_manifest,
+            "reason": "run_manifest_already_completed",
+            "status_before": "completed",
+            "status_after": "completed",
+        }
+    if status_before != "pending":
+        return {
+            **result_with_manifest,
+            "reason": "unsupported_run_manifest_status",
+            "status_before": status_before,
+        }
+    if manifest_period is not None and manifest_period != period:
+        return {
+            **result_with_manifest,
+            "reason": "run_manifest_period_mismatch",
+            "manifest_period": manifest_period,
+            "periodo_informacion": period,
+        }
+
+    final_manifest_json = {
+        "mode": "final_manifest",
+        "run_id": run_id,
+        "periodo_informacion": period,
+        "period_control_status": "loaded",
+        "validation_status": "passed",
+        "row_count": validation["final_row_count"],
+        "sum_ta": validation["final_sum_ta"],
+        "sum_ta_sal": validation["final_sum_ta_sal"],
+        "sum_masa_sal_ta": validation["final_sum_masa_sal_ta"],
+        "staging_row_count": validation["staging_row_count"],
+        "final_row_count": validation["final_row_count"],
+        "row_count_match": validation["row_count_match"],
+        "sum_ta_match": validation["sum_ta_match"],
+        "sum_ta_sal_match": validation["sum_ta_sal_match"],
+        "sum_masa_sal_ta_match": validation["sum_masa_sal_ta_match"],
+        "staging_ptpd_empty_rows": validation["staging_ptpd_empty_rows"],
+        "final_ptpd_no_disponible_rows": validation["final_ptpd_no_disponible_rows"],
+        "final_ptpd_zero_rows": validation["final_ptpd_zero_rows"],
+        "ptpd_empty_to_no_disponible_match": validation["ptpd_empty_to_no_disponible_match"],
+        "reads_source_csv": False,
+        "reads_full_csv": False,
+        "loads_dataframe": False,
+        "touches_staging_table": False,
+        "touches_final_table": False,
+        "writes_period_control_only": False,
+        "writes_run_manifest_only": True,
+        "previous_manifest_json": previous_manifest_json,
+    }
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE imss.imss_run_manifest
+                SET
+                    run_mode = 'final_manifest',
+                    status = 'completed',
+                    started_at = COALESCE(started_at, created_at),
+                    finished_at = CURRENT_TIMESTAMP,
+                    manifest_json = CAST(%s AS jsonb)
+                WHERE run_id = %s
+                  AND status = 'pending'
+                RETURNING run_mode, status, started_at, finished_at;
+                """,
+                (
+                    json.dumps(final_manifest_json, ensure_ascii=False, sort_keys=True),
+                    run_id,
+                ),
+            )
+            updated_row = cursor.fetchone()
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+    if updated_row is None:
+        return {
+            **result_with_manifest,
+            "reason": "run_manifest_not_updated",
+        }
+
+    run_mode_after, status_after, started_at_after, finished_at_after = updated_row
+    return {
+        **result_with_manifest,
+        "finalized": True,
+        "status_after": status_after,
+        "run_mode_after": run_mode_after,
+        "started_at_updated": started_at_after is not None,
+        "finished_at_updated": finished_at_after is not None,
+        "writes_run_manifest_only": True,
+    }
+
+
 def check_existing_period(connection, period: str) -> dict:
     """Read PostgreSQL to determine whether a period already exists.
 
