@@ -16,6 +16,7 @@ from src.imss_engine.postgres.connection import (
 from src.imss_engine.postgres.loader import (
     check_existing_period,
     check_source_csv,
+    finalize_period_control_loaded,
     load_staging_insert_only,
     plan_insert_only_load,
     promote_staging_to_final_insert_only,
@@ -87,6 +88,11 @@ def main() -> None:
         action="store_true",
         help="Validate staging and final consistency for one promoted period with read-only checks.",
     )
+    parser.add_argument(
+        "--finalize-period-control",
+        action="store_true",
+        help="Mark a validated pending period as loaded in imss.imss_period_control.",
+    )
     args = parser.parse_args()
 
     write_or_check_flags = [
@@ -99,13 +105,14 @@ def main() -> None:
         args.load_staging,
         args.promote_staging_final,
         args.validate_post_promotion,
+        args.finalize_period_control,
     ]
     if sum(bool(flag) for flag in write_or_check_flags) > 1:
         print(
             "Use only one of --check-source-csv, --profile-source-csv, "
             "--summarize-source-periods, --check-existing, --register-period-control, "
-            "--register-run-manifest, --load-staging, --promote-staging-final "
-            "or --validate-post-promotion.",
+            "--register-run-manifest, --load-staging, --promote-staging-final, "
+            "--validate-post-promotion or --finalize-period-control.",
             file=sys.stderr,
         )
         raise SystemExit(2)
@@ -212,6 +219,7 @@ def main() -> None:
         or args.load_staging
         or args.promote_staging_final
         or args.validate_post_promotion
+        or args.finalize_period_control
     ):
         if not config.is_complete:
             print(
@@ -252,6 +260,12 @@ def main() -> None:
                 )
             elif args.validate_post_promotion:
                 result = validate_post_promotion_period(connection, args.period)
+            elif args.finalize_period_control:
+                result = finalize_period_control_loaded(
+                    connection,
+                    args.period,
+                    run_id=args.run_id,
+                )
             else:
                 result = check_existing_period(connection, args.period)
         except PostgresDriverMissingError as error:
@@ -268,6 +282,7 @@ def main() -> None:
             args.load_staging
             or args.promote_staging_final
             or args.validate_post_promotion
+            or args.finalize_period_control
         )
         payload = {
             "mode": (
@@ -277,6 +292,8 @@ def main() -> None:
                 if args.promote_staging_final
                 else "validate_post_promotion"
                 if args.validate_post_promotion
+                else "finalize_period_control"
+                if args.finalize_period_control
                 else "load_staging"
                 if args.load_staging
                 else "register_period_control"

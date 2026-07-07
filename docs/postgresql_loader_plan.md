@@ -4,7 +4,7 @@
 
 Este documento describe el flujo operativo actual y objetivo del loader PostgreSQL IMSS.
 
-El proyecto ya cuenta con modos controlados de inspeccion de CSV, registro de periodo, manifest inicial, carga insert-only a staging, promocion insert-only de staging a final y validacion post-promocion. Las etapas de actualizacion formal de estado, housekeeping auditable y manifest final de corrida siguen documentadas como trabajo posterior.
+El proyecto ya cuenta con modos controlados de inspeccion de CSV, registro de periodo, manifest inicial, carga insert-only a staging, promocion insert-only de staging a final, validacion post-promocion y finalizacion formal de periodo en `period_control`. Las etapas de housekeeping auditable y manifest final de corrida siguen documentadas como trabajo posterior.
 
 ## Componentes Creados
 
@@ -38,9 +38,9 @@ El loader debe conservar este orden operativo:
 6. Registrar resultado en `imss.imss_period_control`.
 7. Registrar manifest en `imss.imss_run_manifest`.
 
-Pasos ya implementados como modos controlados: inspeccion de CSV, perfilado streaming, resumen por periodo, chequeo de periodo existente, registro inicial en `period_control`, registro inicial en `run_manifest`, carga insert-only a staging, promocion insert-only a final y validacion post-promocion.
+Pasos ya implementados como modos controlados: inspeccion de CSV, perfilado streaming, resumen por periodo, chequeo de periodo existente, registro inicial en `period_control`, registro inicial en `run_manifest`, carga insert-only a staging, promocion insert-only a final, validacion post-promocion y finalizacion formal de periodo.
 
-Pasos posteriores: actualizacion formal del estado del periodo, housekeeping auditable del CSV fuente y manifest final de corrida.
+Pasos posteriores: housekeeping auditable del CSV fuente y manifest final de corrida.
 
 La version actual conserva semantica insert-only. Periodos existentes deben resolverse como `already_exists` o conflicto, no sobrescribirse.
 
@@ -96,11 +96,11 @@ El flujo objetivo debe avanzar por pasos verificables:
 6. Validar staging.
 7. `promote-staging-final`.
 8. Validar final.
-9. Actualizar estado del periodo cuando exista una funcion formal para ello.
+9. `finalize-period-control`.
 10. Ejecutar housekeeping auditable del CSV fuente en una etapa posterior.
 11. Registrar manifest final de corrida.
 
-Actualmente no todos estos pasos estan implementados como funciones ejecutables. Los pasos de actualizacion formal del estado del periodo, housekeeping auditable y manifest final de corrida quedan como etapas posteriores.
+Actualmente no todos estos pasos estan implementados como funciones ejecutables. Los pasos de housekeeping auditable y manifest final de corrida quedan como etapas posteriores.
 
 ## Reglas De Negocio Que Debe Respetar
 
@@ -118,7 +118,6 @@ Esta rama no implementa:
 
 - limpieza automatica del CSV fuente;
 - housekeeping auditable implementado;
-- actualizacion formal de estado post-promocion;
 - manifest final de corrida;
 - `upsert_period`;
 - `full_refresh`;
@@ -137,7 +136,7 @@ El siguiente bloque de trabajo no debe enfocarse en dashboard, API ni cloud. La 
 - validaciones previas y posteriores a la promocion;
 - guardrails para evitar cargas repetidas;
 - manifests y hashes;
-- estados de periodo;
+- estados de periodo y guardrails posteriores;
 - validacion post-promocion;
 - housekeeping auditable del CSV fuente.
 
@@ -261,6 +260,20 @@ Despues de promover un periodo a `imss.imss_hechos_asegurados`, se puede ejecuta
 Este modo compara `imss.imss_staging_asegurados` contra `imss.imss_hechos_asegurados` para el periodo informado. Revisa existencia en `period_control`, conteos, agregados principales (`ta`, `ta_sal`, `masa_sal_ta`) y el tratamiento de `ptpd` vacio hacia `no_disponible`.
 
 La validacion es prerequisito operativo para un housekeeping auditable del CSV fuente. No modifica PostgreSQL, no modifica el CSV, no actualiza formalmente el estado del periodo, no escribe manifest, no usa pandas y no carga DataFrame.
+
+## Finalizacion Formal De Periodo
+
+Cuando la validacion post-promocion ya paso, se puede cerrar formalmente el periodo en `imss.imss_period_control`:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_postgres_loader.py --finalize-period-control --period 2026-01-31 --run-id manual_finalize_20260131
+```
+
+Este modo ejecuta primero `validate-post-promotion`. Si la validacion falla, no actualiza nada. Si el periodo existe en `period_control`, esta en `pending` y la validacion pasa, actualiza unicamente `imss.imss_period_control` con `status = 'loaded'`, `row_count`, `sum_ta`, `sum_ta_sal`, `sum_masa_sal_ta`, `loaded_at`, `error_message = NULL` y `run_id` cuando se informe.
+
+La finalizacion solo permite la transicion `pending -> loaded`. Si el periodo ya esta `loaded`, responde idempotentemente sin volver a actualizar. Si el estado es distinto de `pending` o `loaded`, no actualiza.
+
+Este modo no modifica staging, no modifica final, no modifica el CSV, no escribe manifest, no implementa housekeeping y no calcula fingerprint todavia. Tampoco actualiza `sum_asegurados` ni `sum_no_trabajadores`, porque esas sumas no forman parte de la validacion formal de esta etapa.
 
 ## Smoke Test De Conexion
 
