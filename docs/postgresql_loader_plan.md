@@ -2,16 +2,16 @@
 
 ## Estado De Esta Rama
 
-Esta rama crea solo un skeleton tecnico para una futura integracion PostgreSQL.
+Este documento describe el flujo operativo actual y objetivo del loader PostgreSQL IMSS.
 
-No implementa carga masiva, no abre conexiones automaticamente, no lee el CSV concentrado grande y no modifica ninguna base de datos.
+El proyecto ya cuenta con modos controlados de inspeccion de CSV, registro de periodo, manifest inicial, carga insert-only a staging y promocion insert-only de staging a final. Las etapas de validacion post-promocion, actualizacion formal de estado, housekeeping auditable y manifest final de corrida siguen documentadas como trabajo posterior.
 
 ## Componentes Creados
 
 - `src/imss_engine/postgres/config.py`: lectura segura de variables `IMSS_PG_*`.
-- `src/imss_engine/postgres/connection.py`: helper futuro para construir conexion cuando exista driver.
-- `src/imss_engine/postgres/loader.py`: contratos placeholder para el flujo insert-only.
-- `scripts/run_postgres_loader.py`: CLI dry-run que imprime el plan y no toca PostgreSQL.
+- `src/imss_engine/postgres/connection.py`: helper para construir conexiones explicitas a PostgreSQL.
+- `src/imss_engine/postgres/loader.py`: funciones controladas para checks, registros iniciales, staging y promocion insert-only.
+- `scripts/run_postgres_loader.py`: CLI operativo con dry-run por defecto y modos explicitos para cada paso controlado.
 - `.env.example`: variables esperadas sin secretos reales.
 
 ## Variables De Entorno
@@ -24,11 +24,11 @@ IMSS_PG_USER
 IMSS_PG_PASSWORD
 ```
 
-El skeleton puede importarse sin estas variables. Si faltan, el CLI dry-run solo reporta configuracion incompleta.
+Los modulos pueden importarse sin estas variables. Si faltan, el CLI dry-run solo reporta configuracion incompleta; los modos que abren conexion requieren configuracion completa.
 
-## Flujo Futuro Insert-Only
+## Flujo Operativo Insert-Only
 
-El loader futuro debe seguir este orden:
+El loader debe conservar este orden operativo:
 
 1. Validar `periodo_informacion`.
 2. Verificar si el periodo ya existe en `imss.imss_period_control` y `imss.imss_hechos_asegurados`.
@@ -38,7 +38,67 @@ El loader futuro debe seguir este orden:
 6. Registrar resultado en `imss.imss_period_control`.
 7. Registrar manifest en `imss.imss_run_manifest`.
 
-La version inicial debe conservar semantica insert-only. Periodos existentes deben resolverse como `already_exists` o conflicto, no sobrescribirse.
+Pasos ya implementados como modos controlados: inspeccion de CSV, perfilado streaming, resumen por periodo, chequeo de periodo existente, registro inicial en `period_control`, registro inicial en `run_manifest`, carga insert-only a staging y promocion insert-only a final.
+
+Pasos posteriores: validacion formal post-promocion, actualizacion formal del estado del periodo, housekeeping auditable del CSV fuente y manifest final de corrida.
+
+La version actual conserva semantica insert-only. Periodos existentes deben resolverse como `already_exists` o conflicto, no sobrescribirse.
+
+## Politica Operativa De Staging Y Final
+
+### Rol De `imss.imss_staging_asegurados`
+
+`imss.imss_staging_asegurados` debe operar como landing normalizado y evidencia tecnica de carga. No es una tabla temporal desechable.
+
+La politica operativa es:
+
+- staging es acumulativa por periodo;
+- staging conserva evidencia para conciliacion, auditoria y reproceso controlado;
+- staging no se borra automaticamente despues de promover un periodo a final;
+- si un periodo ya existe en staging, no se vuelve a cargar automaticamente;
+- cualquier reproceso debe tratarse como flujo explicito de correccion, no como overwrite automatico.
+
+### Rol De `imss.imss_hechos_asegurados`
+
+`imss.imss_hechos_asegurados` es la capa final y curada para consulta analitica. Tambien es acumulativa por periodo.
+
+La promocion `staging -> final` debe conservar semantica insert-only:
+
+- solo promueve periodos explicitamente informados;
+- si el periodo ya existe en final, la promocion se rechaza;
+- no hay overwrite automatico;
+- no hay reproceso implicito.
+
+### CSV Fuente Y Housekeeping Posterior
+
+`data/processed/imss_concentrado.csv` no debe limpiarse ni modificarse como parte de `load-staging` ni de `promote-staging-final`.
+
+La depuracion del CSV fuente queda para una etapa posterior de housekeeping auditable. Esa etapa debera conservar evidencia suficiente para defender el linaje:
+
+- archivo original o copia archivada;
+- archivo resultante;
+- conteos antes y despues;
+- periodos excluidos y conservados;
+- hashes;
+- manifest de la operacion.
+
+## Flujo Operativo Recomendado
+
+El flujo objetivo debe avanzar por pasos verificables:
+
+1. `check-source-csv`.
+2. `profile-source-csv`.
+3. `summarize-source-periods`.
+4. `register-period-control`.
+5. `load-staging`.
+6. Validar staging.
+7. `promote-staging-final`.
+8. Validar final.
+9. Actualizar estado del periodo cuando exista una funcion formal para ello.
+10. Ejecutar housekeeping auditable del CSV fuente en una etapa posterior.
+11. Registrar manifest final de corrida.
+
+Actualmente no todos estos pasos estan implementados como funciones ejecutables. Los pasos de validacion post-promocion, actualizacion formal del estado del periodo, housekeeping auditable y manifest final de corrida quedan como etapas posteriores.
 
 ## Reglas De Negocio Que Debe Respetar
 
@@ -54,8 +114,10 @@ La version inicial debe conservar semantica insert-only. Periodos existentes deb
 
 Esta rama no implementa:
 
-- carga masiva desde `data/processed/imss_concentrado.csv`;
-- lectura del CSV grande;
+- limpieza automatica del CSV fuente;
+- housekeeping auditable implementado;
+- actualizacion formal de estado post-promocion;
+- manifest final de corrida;
 - `upsert_period`;
 - `full_refresh`;
 - sobrescritura de periodos;
@@ -65,6 +127,17 @@ Esta rama no implementa:
 - cloud;
 - Supabase;
 - BigQuery.
+
+## Hardening Operativo
+
+El siguiente bloque de trabajo no debe enfocarse en dashboard, API ni cloud. La prioridad debe ser hardening operativo del motor:
+
+- validaciones previas y posteriores a la promocion;
+- guardrails para evitar cargas repetidas;
+- manifests y hashes;
+- estados de periodo;
+- validacion post-promocion;
+- housekeeping auditable del CSV fuente.
 
 ## Comando Dry-Run
 
