@@ -4,7 +4,7 @@
 
 Este documento describe el flujo operativo actual y objetivo del loader PostgreSQL IMSS.
 
-El proyecto ya cuenta con modos controlados de inspeccion de CSV, registro de periodo, manifest inicial, carga insert-only a staging y promocion insert-only de staging a final. Las etapas de validacion post-promocion, actualizacion formal de estado, housekeeping auditable y manifest final de corrida siguen documentadas como trabajo posterior.
+El proyecto ya cuenta con modos controlados de inspeccion de CSV, registro de periodo, manifest inicial, carga insert-only a staging, promocion insert-only de staging a final y validacion post-promocion. Las etapas de actualizacion formal de estado, housekeeping auditable y manifest final de corrida siguen documentadas como trabajo posterior.
 
 ## Componentes Creados
 
@@ -38,9 +38,9 @@ El loader debe conservar este orden operativo:
 6. Registrar resultado en `imss.imss_period_control`.
 7. Registrar manifest en `imss.imss_run_manifest`.
 
-Pasos ya implementados como modos controlados: inspeccion de CSV, perfilado streaming, resumen por periodo, chequeo de periodo existente, registro inicial en `period_control`, registro inicial en `run_manifest`, carga insert-only a staging y promocion insert-only a final.
+Pasos ya implementados como modos controlados: inspeccion de CSV, perfilado streaming, resumen por periodo, chequeo de periodo existente, registro inicial en `period_control`, registro inicial en `run_manifest`, carga insert-only a staging, promocion insert-only a final y validacion post-promocion.
 
-Pasos posteriores: validacion formal post-promocion, actualizacion formal del estado del periodo, housekeeping auditable del CSV fuente y manifest final de corrida.
+Pasos posteriores: actualizacion formal del estado del periodo, housekeeping auditable del CSV fuente y manifest final de corrida.
 
 La version actual conserva semantica insert-only. Periodos existentes deben resolverse como `already_exists` o conflicto, no sobrescribirse.
 
@@ -100,7 +100,7 @@ El flujo objetivo debe avanzar por pasos verificables:
 10. Ejecutar housekeeping auditable del CSV fuente en una etapa posterior.
 11. Registrar manifest final de corrida.
 
-Actualmente no todos estos pasos estan implementados como funciones ejecutables. Los pasos de validacion post-promocion, actualizacion formal del estado del periodo, housekeeping auditable y manifest final de corrida quedan como etapas posteriores.
+Actualmente no todos estos pasos estan implementados como funciones ejecutables. Los pasos de actualizacion formal del estado del periodo, housekeeping auditable y manifest final de corrida quedan como etapas posteriores.
 
 ## Reglas De Negocio Que Debe Respetar
 
@@ -249,6 +249,18 @@ La promocion requiere que:
 La promocion es insert-only. Inserta desde staging hacia final filtrando `periodo_informacion`, no modifica staging, no modifica `period_control`, no modifica `run_manifest`, no usa upsert, no usa `ON CONFLICT DO UPDATE`, no ejecuta `UPDATE`, no ejecuta `DELETE`, no ejecuta `TRUNCATE` y no implementa `full_refresh`.
 
 Tratamiento de `ptpd`: si `staging.ptpd` viene `NULL` o vacio, se mapea a `no_disponible`. Este valor es compatible con la constraint vigente `chk_imss_hechos_ptpd`, que permite `0`, `1`, `no_disponible` y `no_aplica`. No se convierte `ptpd` vacio a `0`.
+
+## Validacion Post-Promocion
+
+Despues de promover un periodo a `imss.imss_hechos_asegurados`, se puede ejecutar una validacion reusable de solo lectura:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_postgres_loader.py --validate-post-promotion --period 2026-01-31
+```
+
+Este modo compara `imss.imss_staging_asegurados` contra `imss.imss_hechos_asegurados` para el periodo informado. Revisa existencia en `period_control`, conteos, agregados principales (`ta`, `ta_sal`, `masa_sal_ta`) y el tratamiento de `ptpd` vacio hacia `no_disponible`.
+
+La validacion es prerequisito operativo para un housekeeping auditable del CSV fuente. No modifica PostgreSQL, no modifica el CSV, no actualiza formalmente el estado del periodo, no escribe manifest, no usa pandas y no carga DataFrame.
 
 ## Smoke Test De Conexion
 

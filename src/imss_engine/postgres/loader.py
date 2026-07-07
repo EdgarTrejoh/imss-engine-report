@@ -1,8 +1,9 @@
-"""Insert-only PostgreSQL loader skeleton.
+"""Insert-only PostgreSQL loader utilities for the IMSS engine.
 
-This module defines future loader contracts without reading large CSV files or
-modifying a database. All operations are dry-run placeholders unless a future
-implementation replaces them deliberately.
+This module contains bounded CSV inspection, insert-only staging load,
+insert-only staging-to-final promotion, manifest/period bootstrap helpers and
+read-only validation utilities. Destructive period overwrite, full refresh and
+upsert semantics are intentionally out of scope.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import csv
 import re
 import json
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -557,6 +559,62 @@ def _ptpd_empty_count_in_staging(cursor, period: str) -> int:
     return int(cursor.fetchone()[0])
 
 
+def _numeric_for_json(value):
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else str(value)
+    return value
+
+
+def _period_control_status(cursor, period: str) -> tuple[bool, str | None]:
+    cursor.execute(
+        """
+        SELECT status
+        FROM imss.imss_period_control
+        WHERE periodo_informacion = %s;
+        """,
+        (period,),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return False, None
+    return True, row[0]
+
+
+def _period_metric_sums(cursor, table_name: str, period: str) -> dict[str, Any]:
+    cursor.execute(
+        f"""
+        SELECT
+            COALESCE(SUM(ta), 0) AS sum_ta,
+            COALESCE(SUM(ta_sal), 0) AS sum_ta_sal,
+            COALESCE(SUM(masa_sal_ta), 0) AS sum_masa_sal_ta
+        FROM {table_name}
+        WHERE periodo_informacion = %s;
+        """,
+        (period,),
+    )
+    row = cursor.fetchone()
+    return {
+        "sum_ta": row[0],
+        "sum_ta_sal": row[1],
+        "sum_masa_sal_ta": row[2],
+    }
+
+
+def _final_ptpd_count(cursor, period: str, ptpd_value: str) -> int:
+    cursor.execute(
+        """
+        SELECT COUNT(*)
+        FROM imss.imss_hechos_asegurados
+        WHERE periodo_informacion = %s
+          AND ptpd = %s;
+        """,
+        (period, ptpd_value),
+    )
+    return int(cursor.fetchone()[0])
+
+
 def _pg_column(column: str) -> str:
     return f'"{column}"' if column == TAMANO_PATRON_COLUMN else column
 
@@ -880,6 +938,82 @@ def promote_staging_to_final_insert_only(
         "writes_run_manifest_only": False,
         "ptpd_empty_rows_in_staging": ptpd_empty_rows_in_staging,
         "ptpd_mapped_to": ptpd_mapped_to,
+    }
+
+
+def validate_post_promotion_period(connection, period: str) -> dict:
+    """Validate one promoted period by comparing staging and final facts."""
+    validate_period(period)
+    with connection.cursor() as cursor:
+        period_control_exists, period_control_status = _period_control_status(cursor, period)
+        staging_row_count = _staging_count(cursor, period)
+        final_row_count = _final_count(cursor, period)
+        staging_sums = _period_metric_sums(cursor, "imss.imss_staging_asegurados", period)
+        final_sums = _period_metric_sums(cursor, "imss.imss_hechos_asegurados", period)
+        staging_ptpd_empty_rows = _ptpd_empty_count_in_staging(cursor, period)
+        final_ptpd_no_disponible_rows = _final_ptpd_count(cursor, period, "no_disponible")
+        final_ptpd_zero_rows = _final_ptpd_count(cursor, period, "0")
+
+    row_count_match = staging_row_count == final_row_count
+    sum_ta_match = staging_sums["sum_ta"] == final_sums["sum_ta"]
+    sum_ta_sal_match = staging_sums["sum_ta_sal"] == final_sums["sum_ta_sal"]
+    sum_masa_sal_ta_match = staging_sums["sum_masa_sal_ta"] == final_sums["sum_masa_sal_ta"]
+    ptpd_empty_to_no_disponible_match = (
+        staging_ptpd_empty_rows == final_ptpd_no_disponible_rows
+    )
+
+    failed_checks = []
+    if not period_control_exists:
+        failed_checks.append("period_control_exists")
+    if staging_row_count <= 0:
+        failed_checks.append("staging_row_count_positive")
+    if final_row_count <= 0:
+        failed_checks.append("final_row_count_positive")
+    if not row_count_match:
+        failed_checks.append("row_count_match")
+    if not sum_ta_match:
+        failed_checks.append("sum_ta_match")
+    if not sum_ta_sal_match:
+        failed_checks.append("sum_ta_sal_match")
+    if not sum_masa_sal_ta_match:
+        failed_checks.append("sum_masa_sal_ta_match")
+    if not ptpd_empty_to_no_disponible_match:
+        failed_checks.append("ptpd_empty_to_no_disponible_match")
+    if staging_ptpd_empty_rows > 0 and final_ptpd_zero_rows != 0:
+        failed_checks.append("final_ptpd_zero_rows_zero")
+
+    validation_status = "passed" if not failed_checks else "failed"
+
+    return {
+        "periodo_informacion": period,
+        "period_control_exists": period_control_exists,
+        "period_control_status": period_control_status,
+        "staging_row_count": staging_row_count,
+        "final_row_count": final_row_count,
+        "row_count_match": row_count_match,
+        "staging_sum_ta": _numeric_for_json(staging_sums["sum_ta"]),
+        "final_sum_ta": _numeric_for_json(final_sums["sum_ta"]),
+        "sum_ta_match": sum_ta_match,
+        "staging_sum_ta_sal": _numeric_for_json(staging_sums["sum_ta_sal"]),
+        "final_sum_ta_sal": _numeric_for_json(final_sums["sum_ta_sal"]),
+        "sum_ta_sal_match": sum_ta_sal_match,
+        "staging_sum_masa_sal_ta": _numeric_for_json(staging_sums["sum_masa_sal_ta"]),
+        "final_sum_masa_sal_ta": _numeric_for_json(final_sums["sum_masa_sal_ta"]),
+        "sum_masa_sal_ta_match": sum_masa_sal_ta_match,
+        "staging_ptpd_empty_rows": staging_ptpd_empty_rows,
+        "final_ptpd_no_disponible_rows": final_ptpd_no_disponible_rows,
+        "final_ptpd_zero_rows": final_ptpd_zero_rows,
+        "ptpd_empty_to_no_disponible_match": ptpd_empty_to_no_disponible_match,
+        "validation_status": validation_status,
+        "failed_checks": failed_checks,
+        "reads_source_csv": False,
+        "reads_full_csv": False,
+        "loads_dataframe": False,
+        "opens_database_connection": True,
+        "touches_staging_table": False,
+        "touches_final_table": False,
+        "writes_period_control_only": False,
+        "writes_run_manifest_only": False,
     }
 
 
