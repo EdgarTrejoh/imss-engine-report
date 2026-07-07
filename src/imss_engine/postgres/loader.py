@@ -1017,6 +1017,122 @@ def validate_post_promotion_period(connection, period: str) -> dict:
     }
 
 
+def finalize_period_control_loaded(
+    connection,
+    period: str,
+    run_id: str | None = None,
+) -> dict:
+    """Mark one validated period as loaded in period_control."""
+    validate_period(period)
+    validation = validate_post_promotion_period(connection, period)
+    base_result = {
+        "periodo_informacion": period,
+        "validation_status": validation["validation_status"],
+        "finalized": False,
+        "status_before": validation["period_control_status"],
+        "status_after": validation["period_control_status"],
+        "row_count": validation["final_row_count"],
+        "sum_ta": validation["final_sum_ta"],
+        "sum_ta_sal": validation["final_sum_ta_sal"],
+        "sum_masa_sal_ta": validation["final_sum_masa_sal_ta"],
+        "run_id": run_id,
+        "loaded_at_updated": False,
+        "validation": validation,
+        "reads_source_csv": False,
+        "reads_full_csv": False,
+        "loads_dataframe": False,
+        "opens_database_connection": True,
+        "touches_staging_table": False,
+        "touches_final_table": False,
+        "writes_period_control_only": False,
+        "writes_run_manifest_only": False,
+    }
+
+    if not validation["period_control_exists"]:
+        return {**base_result, "reason": "missing_period_control"}
+    if validation["validation_status"] != "passed":
+        return {**base_result, "reason": "post_promotion_validation_failed"}
+
+    status_before = validation["period_control_status"]
+    if status_before == "loaded":
+        return {
+            **base_result,
+            "reason": "period_already_loaded",
+            "status_before": "loaded",
+            "status_after": "loaded",
+        }
+    if status_before != "pending":
+        return {
+            **base_result,
+            "reason": "unsupported_period_control_status",
+            "status_before": status_before,
+            "status_after": status_before,
+        }
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE imss.imss_period_control
+                SET
+                    status = 'loaded',
+                    row_count = %s,
+                    sum_ta = %s,
+                    sum_ta_sal = %s,
+                    sum_masa_sal_ta = %s,
+                    loaded_at = CURRENT_TIMESTAMP,
+                    error_message = NULL,
+                    run_id = COALESCE(%s, run_id)
+                WHERE periodo_informacion = %s
+                  AND status = 'pending'
+                RETURNING
+                    status,
+                    row_count,
+                    sum_ta,
+                    sum_ta_sal,
+                    sum_masa_sal_ta,
+                    run_id,
+                    loaded_at;
+                """,
+                (
+                    validation["final_row_count"],
+                    validation["final_sum_ta"],
+                    validation["final_sum_ta_sal"],
+                    validation["final_sum_masa_sal_ta"],
+                    run_id,
+                    period,
+                ),
+            )
+            updated_row = cursor.fetchone()
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+    if updated_row is None:
+        return {
+            **base_result,
+            "reason": "period_control_not_updated",
+            "status_before": status_before,
+            "status_after": status_before,
+        }
+
+    return {
+        **base_result,
+        "validation_status": "passed",
+        "finalized": True,
+        "status_before": status_before,
+        "status_after": updated_row[0],
+        "row_count": int(updated_row[1]) if updated_row[1] is not None else None,
+        "sum_ta": _numeric_for_json(updated_row[2]),
+        "sum_ta_sal": _numeric_for_json(updated_row[3]),
+        "sum_masa_sal_ta": _numeric_for_json(updated_row[4]),
+        "run_id": updated_row[5],
+        "loaded_at_updated": updated_row[6] is not None,
+        "writes_period_control_only": True,
+    }
+
+
 def check_existing_period(connection, period: str) -> dict:
     """Read PostgreSQL to determine whether a period already exists.
 
