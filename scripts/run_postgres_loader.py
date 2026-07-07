@@ -17,6 +17,7 @@ from src.imss_engine.postgres.loader import (
     check_existing_period,
     check_source_csv,
     finalize_period_control_loaded,
+    finalize_run_manifest,
     load_staging_insert_only,
     plan_insert_only_load,
     promote_staging_to_final_insert_only,
@@ -93,6 +94,11 @@ def main() -> None:
         action="store_true",
         help="Mark a validated pending period as loaded in imss.imss_period_control.",
     )
+    parser.add_argument(
+        "--finalize-run-manifest",
+        action="store_true",
+        help="Mark an existing pending run manifest as completed.",
+    )
     args = parser.parse_args()
 
     write_or_check_flags = [
@@ -106,13 +112,15 @@ def main() -> None:
         args.promote_staging_final,
         args.validate_post_promotion,
         args.finalize_period_control,
+        args.finalize_run_manifest,
     ]
     if sum(bool(flag) for flag in write_or_check_flags) > 1:
         print(
             "Use only one of --check-source-csv, --profile-source-csv, "
             "--summarize-source-periods, --check-existing, --register-period-control, "
             "--register-run-manifest, --load-staging, --promote-staging-final, "
-            "--validate-post-promotion or --finalize-period-control.",
+            "--validate-post-promotion, --finalize-period-control or "
+            "--finalize-run-manifest.",
             file=sys.stderr,
         )
         raise SystemExit(2)
@@ -207,6 +215,10 @@ def main() -> None:
         print("--register-run-manifest requires --run-id.", file=sys.stderr)
         raise SystemExit(2)
 
+    if args.finalize_run_manifest and not args.run_id:
+        print("--finalize-run-manifest requires --run-id.", file=sys.stderr)
+        raise SystemExit(2)
+
     if args.load_staging and not args.source_csv:
         print("--load-staging requires --source-csv.", file=sys.stderr)
         raise SystemExit(2)
@@ -220,6 +232,7 @@ def main() -> None:
         or args.promote_staging_final
         or args.validate_post_promotion
         or args.finalize_period_control
+        or args.finalize_run_manifest
     ):
         if not config.is_complete:
             print(
@@ -266,6 +279,12 @@ def main() -> None:
                     args.period,
                     run_id=args.run_id,
                 )
+            elif args.finalize_run_manifest:
+                result = finalize_run_manifest(
+                    connection,
+                    args.period,
+                    args.run_id,
+                )
             else:
                 result = check_existing_period(connection, args.period)
         except PostgresDriverMissingError as error:
@@ -283,6 +302,7 @@ def main() -> None:
             or args.promote_staging_final
             or args.validate_post_promotion
             or args.finalize_period_control
+            or args.finalize_run_manifest
         )
         payload = {
             "mode": (
@@ -294,6 +314,8 @@ def main() -> None:
                 if args.validate_post_promotion
                 else "finalize_period_control"
                 if args.finalize_period_control
+                else "finalize_run_manifest"
+                if args.finalize_run_manifest
                 else "load_staging"
                 if args.load_staging
                 else "register_period_control"

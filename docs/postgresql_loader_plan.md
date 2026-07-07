@@ -4,7 +4,7 @@
 
 Este documento describe el flujo operativo actual y objetivo del loader PostgreSQL IMSS.
 
-El proyecto ya cuenta con modos controlados de inspeccion de CSV, registro de periodo, manifest inicial, carga insert-only a staging, promocion insert-only de staging a final, validacion post-promocion y finalizacion formal de periodo en `period_control`. Las etapas de housekeeping auditable y manifest final de corrida siguen documentadas como trabajo posterior.
+El proyecto ya cuenta con modos controlados de inspeccion de CSV, registro de periodo, manifest inicial, carga insert-only a staging, promocion insert-only de staging a final, validacion post-promocion, finalizacion formal de periodo en `period_control` y manifest final de corrida. La etapa de housekeeping auditable sigue documentada como trabajo posterior.
 
 ## Componentes Creados
 
@@ -38,9 +38,9 @@ El loader debe conservar este orden operativo:
 6. Registrar resultado en `imss.imss_period_control`.
 7. Registrar manifest en `imss.imss_run_manifest`.
 
-Pasos ya implementados como modos controlados: inspeccion de CSV, perfilado streaming, resumen por periodo, chequeo de periodo existente, registro inicial en `period_control`, registro inicial en `run_manifest`, carga insert-only a staging, promocion insert-only a final, validacion post-promocion y finalizacion formal de periodo.
+Pasos ya implementados como modos controlados: inspeccion de CSV, perfilado streaming, resumen por periodo, chequeo de periodo existente, registro inicial en `period_control`, registro inicial en `run_manifest`, carga insert-only a staging, promocion insert-only a final, validacion post-promocion, finalizacion formal de periodo y manifest final de corrida.
 
-Pasos posteriores: housekeeping auditable del CSV fuente y manifest final de corrida.
+Pasos posteriores: housekeeping auditable del CSV fuente.
 
 La version actual conserva semantica insert-only. Periodos existentes deben resolverse como `already_exists` o conflicto, no sobrescribirse.
 
@@ -97,10 +97,10 @@ El flujo objetivo debe avanzar por pasos verificables:
 7. `promote-staging-final`.
 8. Validar final.
 9. `finalize-period-control`.
-10. Ejecutar housekeeping auditable del CSV fuente en una etapa posterior.
-11. Registrar manifest final de corrida.
+10. `finalize-run-manifest`.
+11. Ejecutar housekeeping auditable del CSV fuente en una etapa posterior.
 
-Actualmente no todos estos pasos estan implementados como funciones ejecutables. Los pasos de housekeeping auditable y manifest final de corrida quedan como etapas posteriores.
+Actualmente no todos estos pasos estan implementados como funciones ejecutables. El paso de housekeeping auditable queda como etapa posterior.
 
 ## Reglas De Negocio Que Debe Respetar
 
@@ -118,7 +118,6 @@ Esta rama no implementa:
 
 - limpieza automatica del CSV fuente;
 - housekeeping auditable implementado;
-- manifest final de corrida;
 - `upsert_period`;
 - `full_refresh`;
 - sobrescritura de periodos;
@@ -274,6 +273,20 @@ Este modo ejecuta primero `validate-post-promotion`. Si la validacion falla, no 
 La finalizacion solo permite la transicion `pending -> loaded`. Si el periodo ya esta `loaded`, responde idempotentemente sin volver a actualizar. Si el estado es distinto de `pending` o `loaded`, no actualiza.
 
 Este modo no modifica staging, no modifica final, no modifica el CSV, no escribe manifest, no implementa housekeeping y no calcula fingerprint todavia. Tampoco actualiza `sum_asegurados` ni `sum_no_trabajadores`, porque esas sumas no forman parte de la validacion formal de esta etapa.
+
+## Manifest Final De Corrida
+
+Despues de `finalize-period-control`, se puede cerrar el manifest inicial existente en `imss.imss_run_manifest`:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_postgres_loader.py --finalize-run-manifest --period 2026-01-31 --run-id manual_manifest_20260131
+```
+
+Este modo actualiza unicamente `imss.imss_run_manifest` para el `run_id` existente. Cambia `run_mode` a `final_manifest`, cambia `status` de `pending` a `completed`, completa `started_at` si estaba vacio, escribe `finished_at` y reemplaza `manifest_json` con evidencia final de validacion.
+
+La finalizacion del manifest requiere que la validacion post-promocion pase y que `imss.imss_period_control.status = 'loaded'`. Si el manifest ya esta `completed`, responde idempotentemente sin volver a actualizar. Si el manifest tiene un periodo distinto en `manifest_json`, no actualiza.
+
+Este modo no modifica `period_control`, no modifica staging, no modifica final, no modifica el CSV, no implementa housekeeping y no calcula `config_hash_sha256` todavia.
 
 ## Smoke Test De Conexion
 
