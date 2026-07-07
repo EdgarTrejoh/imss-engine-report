@@ -615,6 +615,188 @@ def _final_ptpd_count(cursor, period: str, ptpd_value: str) -> int:
     return int(cursor.fetchone()[0])
 
 
+def _final_manifest_for_period(cursor, period: str) -> dict[str, Any]:
+    cursor.execute(
+        """
+        SELECT
+            status,
+            run_mode,
+            manifest_json->>'validation_status',
+            manifest_json->>'period_control_status',
+            manifest_json->>'periodo_informacion'
+        FROM imss.imss_run_manifest
+        WHERE manifest_json->>'periodo_informacion' = %s
+        ORDER BY created_at DESC
+        LIMIT 1;
+        """,
+        (period,),
+    )
+    latest_row = cursor.fetchone()
+
+    cursor.execute(
+        """
+        SELECT
+            status,
+            run_mode,
+            manifest_json->>'validation_status',
+            manifest_json->>'period_control_status',
+            manifest_json->>'periodo_informacion'
+        FROM imss.imss_run_manifest
+        WHERE status = 'completed'
+          AND run_mode = 'final_manifest'
+          AND manifest_json->>'periodo_informacion' = %s
+          AND manifest_json->>'validation_status' = 'passed'
+          AND manifest_json->>'period_control_status' = 'loaded'
+        ORDER BY created_at DESC
+        LIMIT 1;
+        """,
+        (period,),
+    )
+    completed_row = cursor.fetchone()
+    row = completed_row or latest_row
+    return {
+        "final_manifest_exists": completed_row is not None,
+        "final_manifest_status": row[0] if row else None,
+        "final_manifest_run_mode": row[1] if row else None,
+        "final_manifest_validation_status": row[2] if row else None,
+        "final_manifest_period_control_status": row[3] if row else None,
+        "final_manifest_periodo_informacion": row[4] if row else None,
+    }
+
+
+def check_housekeeping_eligibility(
+    connection,
+    source_path: str | Path,
+    period: str | None = None,
+) -> dict:
+    """Evaluate source CSV periods for future housekeeping without writing data."""
+    if period is not None:
+        validate_period(period)
+
+    source_check = check_source_csv(source_path, sample_rows=0)
+    path = Path(source_path)
+    header = source_check["header"]
+    if "periodo_informacion" not in set(header):
+        raise ValueError("source CSV must include periodo_informacion")
+
+    delimiter = source_check["delimiter"]
+    encoding = source_check["encoding"]
+    rows_by_period: dict[str, int] = {}
+    with path.open("r", encoding=encoding, newline="") as file:
+        reader = csv.DictReader(file, delimiter=delimiter)
+        for row in reader:
+            csv_period = (row.get("periodo_informacion") or "").strip()
+            if not csv_period:
+                continue
+            rows_by_period[csv_period] = rows_by_period.get(csv_period, 0) + 1
+
+    periods_detected = sorted(rows_by_period)
+    if period is not None:
+        periods_to_evaluate = [period]
+    else:
+        periods_to_evaluate = []
+        for detected_period in periods_detected:
+            validate_period(detected_period)
+            periods_to_evaluate.append(detected_period)
+    period_results = []
+
+    with connection.cursor() as cursor:
+        for evaluated_period in periods_to_evaluate:
+            staging_row_count = _staging_count(cursor, evaluated_period)
+            final_row_count = _final_count(cursor, evaluated_period)
+            period_control_exists, period_control_status = _period_control_status(
+                cursor, evaluated_period
+            )
+            staging_sums = _period_metric_sums(
+                cursor, "imss.imss_staging_asegurados", evaluated_period
+            )
+            final_sums = _period_metric_sums(
+                cursor, "imss.imss_hechos_asegurados", evaluated_period
+            )
+            manifest = _final_manifest_for_period(cursor, evaluated_period)
+
+            row_count_match = staging_row_count == final_row_count
+            sum_ta_match = staging_sums["sum_ta"] == final_sums["sum_ta"]
+            sum_ta_sal_match = staging_sums["sum_ta_sal"] == final_sums["sum_ta_sal"]
+            sum_masa_sal_ta_match = (
+                staging_sums["sum_masa_sal_ta"] == final_sums["sum_masa_sal_ta"]
+            )
+
+            checks = {
+                "csv_period_present": rows_by_period.get(evaluated_period, 0) > 0,
+                "staging_exists": staging_row_count > 0,
+                "final_exists": final_row_count > 0,
+                "row_count_match": row_count_match,
+                "sum_ta_match": sum_ta_match,
+                "sum_ta_sal_match": sum_ta_sal_match,
+                "sum_masa_sal_ta_match": sum_masa_sal_ta_match,
+                "period_control_loaded": period_control_exists
+                and period_control_status == "loaded",
+                "final_manifest_exists": manifest["final_manifest_exists"],
+            }
+            failed_checks = [name for name, passed in checks.items() if not passed]
+
+            period_results.append(
+                {
+                    "periodo_informacion": evaluated_period,
+                    "csv_rows_detected": rows_by_period.get(evaluated_period, 0),
+                    "staging_exists": checks["staging_exists"],
+                    "final_exists": checks["final_exists"],
+                    "staging_row_count": staging_row_count,
+                    "final_row_count": final_row_count,
+                    "row_count_match": row_count_match,
+                    "staging_sum_ta": _numeric_for_json(staging_sums["sum_ta"]),
+                    "final_sum_ta": _numeric_for_json(final_sums["sum_ta"]),
+                    "sum_ta_match": sum_ta_match,
+                    "staging_sum_ta_sal": _numeric_for_json(staging_sums["sum_ta_sal"]),
+                    "final_sum_ta_sal": _numeric_for_json(final_sums["sum_ta_sal"]),
+                    "sum_ta_sal_match": sum_ta_sal_match,
+                    "staging_sum_masa_sal_ta": _numeric_for_json(
+                        staging_sums["sum_masa_sal_ta"]
+                    ),
+                    "final_sum_masa_sal_ta": _numeric_for_json(
+                        final_sums["sum_masa_sal_ta"]
+                    ),
+                    "sum_masa_sal_ta_match": sum_masa_sal_ta_match,
+                    "period_control_status": period_control_status,
+                    "final_manifest_exists": manifest["final_manifest_exists"],
+                    "final_manifest_status": manifest["final_manifest_status"],
+                    "final_manifest_run_mode": manifest["final_manifest_run_mode"],
+                    "final_manifest_validation_status": manifest[
+                        "final_manifest_validation_status"
+                    ],
+                    "final_manifest_period_control_status": manifest[
+                        "final_manifest_period_control_status"
+                    ],
+                    "final_manifest_periodo_informacion": manifest[
+                        "final_manifest_periodo_informacion"
+                    ],
+                    "eligible_for_housekeeping": not failed_checks,
+                    "failed_checks": failed_checks,
+                    "action_taken": "none",
+                }
+            )
+
+    return {
+        "mode": "check_housekeeping_eligibility",
+        "source_csv_path": str(path),
+        "periods_detected": periods_detected,
+        "periods_evaluated": periods_to_evaluate,
+        "period_results": period_results,
+        "reads_source_csv": True,
+        "reads_full_csv": True,
+        "loads_dataframe": False,
+        "opens_database_connection": True,
+        "touches_staging_table": False,
+        "touches_final_table": False,
+        "writes_period_control_only": False,
+        "writes_run_manifest_only": False,
+        "writes_source_csv": False,
+        "archives_source_csv": False,
+        "creates_output_csv": False,
+    }
+
+
 def _pg_column(column: str) -> str:
     return f'"{column}"' if column == TAMANO_PATRON_COLUMN else column
 
