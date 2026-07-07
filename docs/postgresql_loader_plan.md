@@ -301,6 +301,22 @@ Este modo lee `imss_concentrado.csv` por streaming para detectar periodos y cont
 
 El resultado incluye `eligible_for_housekeeping` y `action_taken = "none"`. Este modo no modifica el CSV fuente, no crea archivos de salida, no archiva evidencia, no modifica staging, no modifica final, no actualiza `period_control`, no escribe `run_manifest`, no usa pandas y no carga DataFrame. El housekeeping auditable sigue siendo una etapa posterior.
 
+## Resumen Compacto De Periodos Resguardados
+
+Para revisar periodos ya preservados en la tabla final sin imprimir el JSON largo de elegibilidad, se puede ejecutar:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_postgres_loader.py --summary-reserved-periods
+```
+
+Tambien puede filtrarse un periodo especifico:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_postgres_loader.py --summary-reserved-periods --period 2026-01-31
+```
+
+Este modo abre conexion con `IMSS_PG_*`, ejecuta solo `SELECT` sobre `imss.imss_hechos_asegurados` y devuelve por periodo: filas en final, `SUM(ta)`, `SUM(ta_sal)`, `SUM(masa_sal_ta)` y SBC promedio calculado como `SUM(masa_sal_ta) / SUM(ta_sal)`. No lee CSV, no usa pandas, no carga DataFrame y no modifica PostgreSQL.
+
 ## Smoke Test De Conexion
 
 Cuando exista un entorno local PostgreSQL configurado, se puede validar solo la conectividad con:
