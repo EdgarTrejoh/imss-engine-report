@@ -391,6 +391,21 @@ Documento de referencia:
 
 ---
 
+## Actualización — PR #26 en curso
+
+PR #26 prepara un downloader histórico IMSS separado del ETL y del loader PostgreSQL.
+
+Alcance previsto:
+
+- Descargar un solo periodo por comando explícito.
+- Conservar raw en `data/raw/imss/asegurados/YYYY/`.
+- Generar manifest local en `outputs/audit/download/`.
+- No tocar `data/processed/imss_concentrado.csv`.
+- No cargar PostgreSQL.
+- No implementar housekeeping real.
+
+---
+
 ## Documento listo para reentrada
 
 Continuar desde:
