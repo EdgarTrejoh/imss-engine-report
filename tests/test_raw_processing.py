@@ -115,6 +115,42 @@ def test_process_raw_recombines_same_analytic_key_across_chunks(tmp_path):
     assert aggregate_df.loc[0, "masa_sal_ta"] == 50.0
 
 
+def test_process_raw_writes_compatible_dimension_values(tmp_path):
+    raw_root = tmp_path / "raw"
+    output_dir = tmp_path / "outputs" / "processing"
+    rows = [
+        _sample_row(
+            {
+                "cve_municipio": "",
+                "tamaño_patron": "",
+                "rango_edad": "",
+                "rango_salarial": "",
+                "sector_economico_1": "1.0",
+                "sector_economico_2": "11.0",
+                "sector_economico_4": "1101.0",
+            }
+        )
+    ]
+    _write_raw(raw_root, "2016-06-30", rows)
+
+    manifest, _ = process_imss_raw_period(
+        "2016-06-30",
+        raw_root=raw_root,
+        output_dir=output_dir,
+        chunk_size=1,
+    )
+
+    aggregate_df = pd.read_csv(manifest["aggregate_output_path"], dtype=str, keep_default_na=False)
+    assert manifest["dimension_normalization"]["applied"] is True
+    assert aggregate_df.loc[0, "cve_municipio"] == "NA"
+    assert aggregate_df.loc[0, "tamaño_patron"] == "NA"
+    assert aggregate_df.loc[0, "rango_edad"] == "NA"
+    assert aggregate_df.loc[0, "rango_ingreso_vsm"] == "NA"
+    assert aggregate_df.loc[0, "sector_economico_1"] == "1"
+    assert aggregate_df.loc[0, "sector_economico_2"] == "11"
+    assert aggregate_df.loc[0, "sector_economico_4"] == "1101"
+
+
 def test_process_raw_only_processes_requested_period(tmp_path):
     raw_root = tmp_path / "raw"
     output_dir = tmp_path / "outputs" / "processing"
