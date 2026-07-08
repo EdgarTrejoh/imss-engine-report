@@ -17,7 +17,7 @@ El proyecto ya cuenta con el comando `--summary-reserved-periods` para consultar
 
 También existe el pre-check de elegibilidad de housekeeping, que diagnostica si un periodo tiene evidencia suficiente para considerarse candidato a una limpieza futura del CSV operativo.
 
-Housekeeping real no existe todavía. Downloader histórico no existe todavía.
+Housekeeping real no existe todavía. El downloader histórico queda separado de la carga y debe operar por periodo con manifest local.
 
 El CSV actual `data/processed/imss_concentrado.csv` no debe tocarse todavía.
 
@@ -62,7 +62,7 @@ Reglas de uso:
 - `outputs/` contiene evidencia local no versionada.
 - La evidencia futura debería migrar a una tabla/base de auditoría.
 
-## 5. Manifest de descarga propuesto
+## 5. Manifest de descarga
 
 Campos esperados:
 
@@ -76,6 +76,8 @@ Campos esperados:
 - `sha256`
 - `status`
 - `error_message`
+
+El PR #26 implementa el primer downloader controlado por periodo. Su alcance se limita a descargar un CSV raw, conservarlo en `data/raw/imss/asegurados/YYYY/`, calcular tamaño/hash y escribir un manifest local en `outputs/audit/download/`. No procesa CSV, no toca `data/processed/imss_concentrado.csv` y no carga PostgreSQL.
 
 ## 6. Manifest de procesamiento propuesto
 
