@@ -7,6 +7,7 @@ import json
 import os
 import re
 from dataclasses import asdict, dataclass
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -36,6 +37,18 @@ RUN_STATUSES = {
     "completed_with_warnings",
     "failed",
 }
+FINGERPRINT_DECIMAL_QUANT = Decimal("0.0001")
+FINGERPRINT_INTEGER_SUM_COLUMNS = (
+    "asegurados",
+    "no_trabajadores",
+    "ta",
+    "ta_sal",
+    "tpu",
+    "tpc",
+    "teu",
+    "tec",
+)
+FINGERPRINT_DECIMAL_SUM_COLUMNS = ("masa_sal_ta",)
 
 
 @dataclass(frozen=True)
@@ -116,22 +129,34 @@ def _json_number(value) -> int | float | None:
     return int(number) if number.is_integer() else number
 
 
+def _int_for_fingerprint(value) -> int | None:
+    if pd.isna(value):
+        return None
+    return int(round(float(value)))
+
+
+def _decimal_for_fingerprint(value) -> str | None:
+    if pd.isna(value):
+        return None
+    try:
+        decimal_value = Decimal(str(value))
+    except InvalidOperation:
+        decimal_value = Decimal(str(float(value)))
+    return str(decimal_value.quantize(FINGERPRINT_DECIMAL_QUANT, rounding=ROUND_HALF_UP))
+
+
 def period_fingerprint_summary(df: pd.DataFrame, period: str) -> dict:
     """Build a stable, low-cost functional summary for one period."""
     period_df = df[df["periodo_informacion"].astype("string") == period].copy()
     numeric = {}
-    for column in (
-        "asegurados",
-        "no_trabajadores",
-        "ta",
-        "ta_sal",
-        "masa_sal_ta",
-        "tpu",
-        "tpc",
-        "teu",
-        "tec",
-    ):
-        numeric[f"sum_{column}"] = _json_number(pd.to_numeric(period_df[column], errors="coerce").sum())
+    for column in FINGERPRINT_INTEGER_SUM_COLUMNS:
+        numeric[f"sum_{column}"] = _int_for_fingerprint(
+            pd.to_numeric(period_df[column], errors="coerce").sum()
+        )
+    for column in FINGERPRINT_DECIMAL_SUM_COLUMNS:
+        numeric[f"sum_{column}"] = _decimal_for_fingerprint(
+            pd.to_numeric(period_df[column], errors="coerce").sum()
+        )
 
     group_columns = [column for column in get_group_columns() if column in period_df.columns]
     distinct_keys = int(period_df[group_columns].drop_duplicates().shape[0]) if group_columns else None

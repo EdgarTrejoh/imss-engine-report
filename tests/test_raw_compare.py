@@ -130,6 +130,38 @@ def test_compare_reports_conflict_hash(tmp_path):
     )
 
 
+def test_compare_treats_minimal_float_noise_as_already_exists(tmp_path):
+    manifest, _ = _compare(
+        tmp_path,
+        [_row(values={"masa_sal_ta": "5683478926.29"})],
+        [_row(values={"masa_sal_ta": "5683478926.289999"})],
+    )
+
+    assert manifest["status"] == "success"
+    assert manifest["comparison_status"] == "already_exists"
+    assert manifest["aggregate_summary"]["sum_masa_sal_ta"] == "5683478926.2900"
+    assert manifest["existing_summary"]["sum_masa_sal_ta"] == "5683478926.2900"
+    assert (
+        manifest["aggregate_summary"]["fingerprint_sha256"]
+        == manifest["existing_summary"]["fingerprint_sha256"]
+    )
+
+
+def test_compare_still_detects_real_decimal_difference(tmp_path):
+    manifest, _ = _compare(
+        tmp_path,
+        [_row(values={"masa_sal_ta": "5683478926.29"})],
+        [_row(values={"masa_sal_ta": "5683478926.30"})],
+    )
+
+    assert manifest["status"] == "conflict"
+    assert manifest["comparison_status"] == "conflict_existing_period_hash"
+    assert (
+        manifest["aggregate_summary"]["fingerprint_sha256"]
+        != manifest["existing_summary"]["fingerprint_sha256"]
+    )
+
+
 def test_compare_reports_missing_concentrado_without_creating_data_processed(tmp_path):
     aggregate = _write_csv(tmp_path / "outputs" / "processing" / "aggregate.csv", [_row()])
     concentrado = tmp_path / "missing" / "imss_concentrado.csv"
