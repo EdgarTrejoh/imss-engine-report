@@ -81,6 +81,52 @@ def test_hash_changes_when_metric_changes():
     assert period_fingerprint_hash(base) != period_fingerprint_hash(changed)
 
 
+def _fingerprint_df(*, masa_sal_ta="5683478926.29", ta="18154906"):
+    return pd.DataFrame(
+        {
+            "periodo_informacion": ["2016-03-31"],
+            "asegurados": ["25715325"],
+            "no_trabajadores": ["7560419"],
+            "ta": [ta],
+            "ta_sal": ["18011170"],
+            "masa_sal_ta": [masa_sal_ta],
+            "tpu": ["15276516"],
+            "tpc": ["256514"],
+            "teu": ["2394552"],
+            "tec": ["227324"],
+        }
+    )
+
+
+def test_period_fingerprint_ignores_minimal_float_noise():
+    left_summary, left_hash = calculate_period_fingerprint(
+        _fingerprint_df(masa_sal_ta="5683478926.29"),
+        "2016-03-31",
+    )
+    right_summary, right_hash = calculate_period_fingerprint(
+        _fingerprint_df(masa_sal_ta="5683478926.289999"),
+        "2016-03-31",
+    )
+
+    assert left_summary["sum_masa_sal_ta"] == "5683478926.2900"
+    assert right_summary["sum_masa_sal_ta"] == "5683478926.2900"
+    assert left_hash == right_hash
+
+
+def test_period_fingerprint_detects_real_decimal_difference():
+    _, left_hash = calculate_period_fingerprint(_fingerprint_df(masa_sal_ta="5683478926.29"), "2016-03-31")
+    _, right_hash = calculate_period_fingerprint(_fingerprint_df(masa_sal_ta="5683478926.30"), "2016-03-31")
+
+    assert left_hash != right_hash
+
+
+def test_period_fingerprint_detects_real_integer_difference():
+    _, left_hash = calculate_period_fingerprint(_fingerprint_df(ta="18154906"), "2016-03-31")
+    _, right_hash = calculate_period_fingerprint(_fingerprint_df(ta="18154907"), "2016-03-31")
+
+    assert left_hash != right_hash
+
+
 def test_concentrado_is_created_when_missing(tmp_path, load_fixture):
     concentrado = tmp_path / "imss_concentrado.csv"
     df = _aggregated(load_fixture)
