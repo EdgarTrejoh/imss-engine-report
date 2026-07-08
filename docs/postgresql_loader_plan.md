@@ -32,6 +32,10 @@ El estado operativo vigente, decisiones tomadas, restricciones y proximos pasos 
 
 `docs/continuidad/ACTA_CONTINUIDAD_IMSS_ENGINE_REPORT.md`
 
+La estrategia histórica de descarga IMSS y evidencia operativa se documenta en:
+
+`docs/continuidad/IMSS_HISTORICAL_DOWNLOAD_AND_EVIDENCE_STRATEGY.md`
+
 ## Flujo Operativo Insert-Only
 
 El loader debe conservar este orden operativo:
