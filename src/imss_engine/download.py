@@ -25,6 +25,10 @@ def validate_period(period: str) -> str:
     """Validate and return a YYYY-MM-DD IMSS period string."""
     if not isinstance(period, str) or not PERIOD_RE.match(period):
         raise ValueError("period must be a string in YYYY-MM-DD format")
+    try:
+        datetime.strptime(period, "%Y-%m-%d")
+    except ValueError as error:
+        raise ValueError("period must be a valid date in YYYY-MM-DD format") from error
     return period
 
 
@@ -133,6 +137,9 @@ def create_download_manifest_base(
         "downloaded": False,
         "file_size_bytes": None,
         "sha256": None,
+        "partial_file_path": None,
+        "partial_file_exists": False,
+        "partial_file_removed": False,
         "status": None,
         "error_message": None,
         "started_at": started_at,
@@ -187,6 +194,10 @@ def download_imss_period(
         started_at=started_at,
     )
     manifest["config_path"] = str(resolved_config_path)
+    partial_path = raw_file_path.with_suffix(raw_file_path.suffix + ".part")
+    partial_existed_before = partial_path.exists()
+    manifest["partial_file_path"] = str(partial_path)
+    manifest["partial_file_exists"] = partial_existed_before
 
     try:
         if raw_file_path.exists():
@@ -207,7 +218,6 @@ def download_imss_period(
             return manifest, write_download_manifest(manifest, manifest_dir)
 
         raw_file_path.parent.mkdir(parents=True, exist_ok=True)
-        partial_path = raw_file_path.with_suffix(raw_file_path.suffix + ".part")
         if partial_path.exists():
             raise FileExistsError(f"Partial download already exists: {partial_path}")
 
@@ -220,10 +230,15 @@ def download_imss_period(
         manifest["downloaded"] = True
         manifest["file_size_bytes"] = get_file_size_bytes(raw_file_path)
         manifest["sha256"] = calculate_sha256(raw_file_path)
+        manifest["partial_file_exists"] = partial_path.exists()
         manifest["status"] = "success"
         manifest["finished_at"] = now_utc_iso()
         return manifest, write_download_manifest(manifest, manifest_dir)
     except Exception as error:
+        if partial_path.exists() and not partial_existed_before:
+            partial_path.unlink()
+            manifest["partial_file_removed"] = True
+        manifest["partial_file_exists"] = partial_path.exists()
         manifest["status"] = "failed"
         manifest["error_message"] = str(error)
         manifest["finished_at"] = now_utc_iso()

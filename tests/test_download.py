@@ -29,6 +29,12 @@ class FakeResponse:
         yield from self.chunks
 
 
+class FailingResponse(FakeResponse):
+    def iter_content(self, chunk_size):
+        yield b"partial"
+        raise RuntimeError("stream interrupted")
+
+
 def _write_config(path):
     path.write_text(
         "\n".join(
@@ -41,9 +47,20 @@ def _write_config(path):
     )
 
 
+def test_validate_period_accepts_real_date():
+    assert validate_period("2016-04-30") == "2016-04-30"
+
+
 def test_validate_period_rejects_invalid_format():
     with pytest.raises(ValueError, match="YYYY-MM-DD"):
         validate_period("2016-04")
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        validate_period("abcd-01-01")
+
+
+def test_validate_period_rejects_impossible_date():
+    with pytest.raises(ValueError, match="valid date"):
+        validate_period("2016-02-31")
 
 
 def test_build_source_url_uses_configured_pattern():
@@ -149,3 +166,31 @@ def test_existing_raw_with_different_manifest_hash_is_not_overwritten(tmp_path):
     assert manifest["status"] == "conflict_existing_raw_hash"
     assert manifest["downloaded"] is False
     assert json.loads(manifest_path.read_text(encoding="utf-8"))["status"] == "conflict_existing_raw_hash"
+
+
+def test_failed_download_removes_partial_and_writes_error_manifest(tmp_path):
+    config = tmp_path / "config.yaml"
+    raw_root = tmp_path / "raw"
+    manifest_dir = tmp_path / "outputs" / "audit" / "download"
+    _write_config(config)
+
+    manifest, manifest_path = download_imss_period(
+        "2016-04-30",
+        config_path=config,
+        raw_root=raw_root,
+        manifest_dir=manifest_dir,
+        request_get=lambda *args, **kwargs: FailingResponse([]),
+    )
+
+    raw_path = raw_root / "2016" / "asg-2016-04-30.csv"
+    partial_path = raw_root / "2016" / "asg-2016-04-30.csv.part"
+    saved_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert not raw_path.exists()
+    assert not partial_path.exists()
+    assert manifest["status"] == "failed"
+    assert manifest["downloaded"] is False
+    assert manifest["partial_file_path"] == str(partial_path)
+    assert manifest["partial_file_exists"] is False
+    assert manifest["partial_file_removed"] is True
+    assert saved_manifest["status"] == "failed"
+    assert saved_manifest["partial_file_removed"] is True
