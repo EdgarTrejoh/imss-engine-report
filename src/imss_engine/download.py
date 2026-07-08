@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,11 @@ PERIOD_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 DEFAULT_CONFIG_PATHS = (Path("config/config.yaml"), Path("config.yaml"))
 DEFAULT_RAW_ROOT = Path("data/raw/imss/asegurados")
 DEFAULT_MANIFEST_DIR = Path("outputs/audit/download")
+DEFAULT_MAX_ATTEMPTS = 3
+DEFAULT_CONNECT_TIMEOUT_SECONDS = 15
+DEFAULT_READ_TIMEOUT_SECONDS = 120
+DEFAULT_BACKOFF_SECONDS = (2, 5)
+RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 def validate_period(period: str) -> str:
@@ -140,6 +146,13 @@ def create_download_manifest_base(
         "partial_file_path": None,
         "partial_file_exists": False,
         "partial_file_removed": False,
+        "attempts": 0,
+        "max_attempts": DEFAULT_MAX_ATTEMPTS,
+        "timeouts": {
+            "connect_seconds": DEFAULT_CONNECT_TIMEOUT_SECONDS,
+            "read_seconds": DEFAULT_READ_TIMEOUT_SECONDS,
+        },
+        "retry_errors": [],
         "status": None,
         "error_message": None,
         "started_at": started_at,
@@ -159,13 +172,76 @@ def _download_to_partial(
     partial_path: Path,
     request_get: Callable = requests.get,
     chunk_size: int = 1024 * 1024,
+    timeout: tuple[int, int] = (DEFAULT_CONNECT_TIMEOUT_SECONDS, DEFAULT_READ_TIMEOUT_SECONDS),
 ) -> None:
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    with request_get(source_url, headers=headers, stream=True) as response:
+    with request_get(source_url, headers=headers, stream=True, timeout=timeout) as response:
         response.raise_for_status()
         with partial_path.open("wb") as file:
             for chunk in _iter_response_content(response, chunk_size):
                 file.write(chunk)
+
+
+def _http_status_code(error: Exception) -> int | None:
+    response = getattr(error, "response", None)
+    status_code = getattr(response, "status_code", None)
+    return int(status_code) if status_code is not None else None
+
+
+def _is_retryable_download_error(error: Exception) -> bool:
+    if isinstance(error, (requests.Timeout, requests.ConnectionError)):
+        return True
+    if isinstance(error, requests.HTTPError):
+        status_code = _http_status_code(error)
+        return status_code in RETRYABLE_HTTP_STATUS_CODES
+    return False
+
+
+def _retry_error_payload(error: Exception, attempt: int, retryable: bool) -> dict:
+    payload = {
+        "attempt": attempt,
+        "error_type": type(error).__name__,
+        "error_message": str(error),
+        "retryable": retryable,
+    }
+    status_code = _http_status_code(error)
+    if status_code is not None:
+        payload["status_code"] = status_code
+    return payload
+
+
+def _download_with_retries(
+    *,
+    source_url: str,
+    partial_path: Path,
+    request_get: Callable,
+    max_attempts: int,
+    connect_timeout_seconds: int,
+    read_timeout_seconds: int,
+    backoff_seconds: tuple[int, ...],
+    sleep_func: Callable[[int], None],
+) -> tuple[int, list[dict]]:
+    retry_errors: list[dict] = []
+    timeout = (connect_timeout_seconds, read_timeout_seconds)
+    for attempt in range(1, max_attempts + 1):
+        try:
+            _download_to_partial(
+                source_url=source_url,
+                partial_path=partial_path,
+                request_get=request_get,
+                timeout=timeout,
+            )
+            return attempt, retry_errors
+        except Exception as error:
+            retryable = _is_retryable_download_error(error)
+            retry_errors.append(_retry_error_payload(error, attempt, retryable))
+            if not retryable or attempt >= max_attempts:
+                setattr(error, "download_attempts", attempt)
+                setattr(error, "retry_errors", retry_errors)
+                raise
+            wait_seconds = backoff_seconds[min(attempt - 1, len(backoff_seconds) - 1)]
+            sleep_func(wait_seconds)
+    return max_attempts, retry_errors
 
 
 def download_imss_period(
@@ -176,9 +252,20 @@ def download_imss_period(
     manifest_dir: str | Path = DEFAULT_MANIFEST_DIR,
     request_get: Callable = requests.get,
     expected_sha256: str | None = None,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    connect_timeout_seconds: int = DEFAULT_CONNECT_TIMEOUT_SECONDS,
+    read_timeout_seconds: int = DEFAULT_READ_TIMEOUT_SECONDS,
+    backoff_seconds: tuple[int, ...] = DEFAULT_BACKOFF_SECONDS,
+    sleep_func: Callable[[int], None] = time.sleep,
 ) -> tuple[dict, Path]:
     """Download one IMSS period as raw CSV and write a local manifest."""
     period = validate_period(period)
+    if max_attempts <= 0:
+        raise ValueError("max_attempts must be greater than zero")
+    if connect_timeout_seconds <= 0 or read_timeout_seconds <= 0:
+        raise ValueError("download timeouts must be greater than zero")
+    if not backoff_seconds:
+        raise ValueError("backoff_seconds must not be empty")
     etl_config, resolved_config_path = read_etl_config(config_path)
     source_url = build_source_url(etl_config["base_url"], period)
     raw_file_path = build_raw_file_path(period, raw_root)
@@ -194,6 +281,11 @@ def download_imss_period(
         started_at=started_at,
     )
     manifest["config_path"] = str(resolved_config_path)
+    manifest["max_attempts"] = max_attempts
+    manifest["timeouts"] = {
+        "connect_seconds": connect_timeout_seconds,
+        "read_seconds": read_timeout_seconds,
+    }
     partial_path = raw_file_path.with_suffix(raw_file_path.suffix + ".part")
     partial_existed_before = partial_path.exists()
     manifest["partial_file_path"] = str(partial_path)
@@ -221,11 +313,18 @@ def download_imss_period(
         if partial_path.exists():
             raise FileExistsError(f"Partial download already exists: {partial_path}")
 
-        _download_to_partial(
+        attempts, retry_errors = _download_with_retries(
             source_url=source_url,
             partial_path=partial_path,
             request_get=request_get,
+            max_attempts=max_attempts,
+            connect_timeout_seconds=connect_timeout_seconds,
+            read_timeout_seconds=read_timeout_seconds,
+            backoff_seconds=tuple(backoff_seconds),
+            sleep_func=sleep_func,
         )
+        manifest["attempts"] = attempts
+        manifest["retry_errors"] = retry_errors
         os.replace(partial_path, raw_file_path)
         manifest["downloaded"] = True
         manifest["file_size_bytes"] = get_file_size_bytes(raw_file_path)
@@ -235,6 +334,12 @@ def download_imss_period(
         manifest["finished_at"] = now_utc_iso()
         return manifest, write_download_manifest(manifest, manifest_dir)
     except Exception as error:
+        manifest["attempts"] = int(getattr(error, "download_attempts", manifest["attempts"] or 1))
+        manifest["retry_errors"] = list(getattr(error, "retry_errors", manifest["retry_errors"]))
+        if not manifest["retry_errors"]:
+            manifest["retry_errors"] = [
+                _retry_error_payload(error, manifest["attempts"], _is_retryable_download_error(error))
+            ]
         if partial_path.exists() and not partial_existed_before:
             partial_path.unlink()
             manifest["partial_file_removed"] = True
