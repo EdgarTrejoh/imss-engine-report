@@ -26,6 +26,12 @@ IMSS_PG_PASSWORD
 
 Los modulos pueden importarse sin estas variables. Si faltan, el CLI dry-run solo reporta configuracion incompleta; los modos que abren conexion requieren configuracion completa.
 
+## Continuidad operativa
+
+El estado operativo vigente, decisiones tomadas, restricciones y proximos pasos del proyecto se documentan en:
+
+`docs/continuidad/ACTA_CONTINUIDAD_IMSS_ENGINE_REPORT.md`
+
 ## Flujo Operativo Insert-Only
 
 El loader debe conservar este orden operativo:
