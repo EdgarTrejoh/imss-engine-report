@@ -381,6 +381,16 @@ Pendientes posteriores:
 
 ---
 
+## Actualización — Estrategia histórica pendiente
+
+Después de PR #23 y PR #24, el siguiente frente recomendado es definir la estrategia de descarga histórica y evidencia operativa antes de implementar downloader o housekeeping real.
+
+Documento de referencia:
+
+`docs/continuidad/IMSS_HISTORICAL_DOWNLOAD_AND_EVIDENCE_STRATEGY.md`
+
+---
+
 ## Documento listo para reentrada
 
 Continuar desde:
