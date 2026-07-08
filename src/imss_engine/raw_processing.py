@@ -17,6 +17,11 @@ from .download import (
     now_utc_iso,
     validate_period,
 )
+from .dimension_normalization import (
+    BLANK_TO_NA_COLUMNS,
+    SECTOR_DECIMAL_TO_INTEGER_COLUMNS,
+    normalize_imss_dimension_values,
+)
 from .metrics import add_validation_differences, calculate_sbc_metrics
 from .raw_validation import DEFAULT_RAW_ENCODING, DEFAULT_RAW_SEPARATOR, validate_imss_raw
 from .schema import CRITICAL_METRIC_COLUMNS
@@ -82,6 +87,11 @@ def _base_manifest(
         "aggregate_file_size_bytes": None,
         "aggregate_sha256": None,
         "columns_output": [],
+        "dimension_normalization": {
+            "applied": False,
+            "blank_to_na_columns": list(BLANK_TO_NA_COLUMNS),
+            "sector_decimal_to_integer_columns": list(SECTOR_DECIMAL_TO_INTEGER_COLUMNS),
+        },
         "status": None,
         "error_message": None,
         "started_at": started_at,
@@ -170,6 +180,8 @@ def process_imss_raw_period(
             raise ValueError("Raw file did not produce any chunks to process.")
 
         aggregate_df = _combine_aggregates(pd.concat(aggregated_chunks, ignore_index=True))
+        aggregate_df = normalize_imss_dimension_values(aggregate_df)
+        manifest["dimension_normalization"]["applied"] = True
         aggregate_df["fuente"] = "IMSS"
         aggregate_df["timestamp"] = now_utc_iso()
 
