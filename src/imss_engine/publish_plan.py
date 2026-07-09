@@ -16,6 +16,7 @@ from .raw_compare import (
 
 
 DEFAULT_PUBLISH_PLAN_OUTPUT_DIR = DEFAULT_COMPARE_OUTPUT_DIR
+DISALLOWED_OUTPUT_DIR = Path("data") / "processed"
 
 ACTION_BY_COMPARISON_STATUS: dict[str, tuple[str, str, str]] = {
     "already_exists": (
@@ -60,7 +61,22 @@ def _plan_path(output_dir: str | Path, run_id: str, period: str) -> Path:
     return Path(output_dir) / f"publish_plan_{run_id}_{validate_period(period)}.json"
 
 
+def _resolve_from_cwd(path: str | Path) -> Path:
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    return candidate.resolve(strict=False)
+
+
+def _ensure_output_dir_allowed(output_dir: str | Path) -> None:
+    candidate = _resolve_from_cwd(output_dir)
+    disallowed = _resolve_from_cwd(DISALLOWED_OUTPUT_DIR)
+    if candidate == disallowed or disallowed in candidate.parents:
+        raise ValueError("output_dir cannot be data/processed or a child of data/processed")
+
+
 def write_publish_plan(plan: dict, output_dir: str | Path = DEFAULT_PUBLISH_PLAN_OUTPUT_DIR) -> Path:
+    _ensure_output_dir_allowed(output_dir)
     path = _plan_path(output_dir, plan["run_id"], plan["periodo_informacion"])
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -94,6 +110,7 @@ def build_publish_plan(
 ) -> tuple[dict, Path]:
     """Build a dry-run publish plan from the existing read-only comparison result."""
     period = validate_period(period)
+    _ensure_output_dir_allowed(output_dir)
     run_id = generate_publish_plan_run_id()
     created_at = now_utc_iso()
     compare_result, compare_manifest_path = compare_raw_aggregate_with_concentrado(

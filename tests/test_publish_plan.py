@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from src.imss_engine.download import calculate_sha256
 from src.imss_engine.publish_plan import build_publish_plan
 
@@ -238,3 +240,35 @@ def test_publish_plan_contains_minimum_required_fields(tmp_path):
         "error_message",
     ):
         assert key in plan
+
+
+def test_publish_plan_rejects_data_processed_output_dir(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    aggregate = _write_csv(tmp_path / "outputs" / "processing" / "aggregate.csv", [_row()])
+    concentrado = _write_csv(tmp_path / "data" / "processed_source" / "imss_concentrado.csv", [_row()])
+
+    with pytest.raises(ValueError, match="data/processed"):
+        build_publish_plan(
+            "2016-06-30",
+            aggregate_file=aggregate,
+            concentrado_file=concentrado,
+            output_dir="data/processed",
+        )
+
+    assert not (tmp_path / "data" / "processed").exists()
+
+
+def test_publish_plan_rejects_data_processed_child_output_dir(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    aggregate = _write_csv(tmp_path / "outputs" / "processing" / "aggregate.csv", [_row()])
+    concentrado = _write_csv(tmp_path / "data" / "processed_source" / "imss_concentrado.csv", [_row()])
+
+    with pytest.raises(ValueError, match="data/processed"):
+        build_publish_plan(
+            "2016-06-30",
+            aggregate_file=aggregate,
+            concentrado_file=concentrado,
+            output_dir=Path("data") / "processed" / "plans",
+        )
+
+    assert not (tmp_path / "data" / "processed").exists()

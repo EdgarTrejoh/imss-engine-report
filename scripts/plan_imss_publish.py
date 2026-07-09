@@ -28,12 +28,27 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    plan, plan_path = build_publish_plan(
-        args.period,
-        aggregate_file=args.aggregate_file,
-        concentrado_file=args.concentrado_file,
-        output_dir=args.output_dir,
-    )
+    try:
+        plan, plan_path = build_publish_plan(
+            args.period,
+            aggregate_file=args.aggregate_file,
+            concentrado_file=args.concentrado_file,
+            output_dir=args.output_dir,
+        )
+    except ValueError as exc:
+        payload = {
+            "status": "failed",
+            "publish_plan_path": None,
+            "result": {
+                "status": "failed",
+                "action": "block",
+                "would_write": False,
+                "error_message": str(exc),
+            },
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        raise SystemExit(1) from exc
+
     payload = {
         "status": plan["status"],
         "publish_plan_path": str(plan_path),
