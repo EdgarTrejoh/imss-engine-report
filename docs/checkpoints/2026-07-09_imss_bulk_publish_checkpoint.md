@@ -153,7 +153,9 @@ outputs\audit\publish\publish_manifest_20260709T202517Z_4ed7708e_2016-05-31.json
 Backups:
 
 ```text
+outputs\audit\publish\backups\imss_concentrado_20260709T173848Z_9b61633b_before.csv
 outputs\audit\publish\backups\imss_concentrado_20260709T193830Z_e28efa23_before.csv
+outputs\audit\publish\backups\imss_concentrado_20260709T201045Z_310aff8c_before.csv
 ```
 
 `outputs/` esta ignorado por Git y se conserva como evidencia operativa local. Estos archivos se citan por ruta, pero no se agregan al repositorio.
