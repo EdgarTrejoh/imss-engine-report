@@ -371,3 +371,73 @@ def test_cli_returns_parseable_json_for_controlled_error(tmp_path):
     assert payload["status"] == "failed"
     assert payload["action"] == "block"
     assert payload["result"]["loads_postgresql"] is False
+
+
+def test_publish_rejects_data_processed_compare_output_dir(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _, plan_path, _, concentrado = _make_insert_candidate_plan(tmp_path)
+
+    result, _ = _publish(
+        plan_path,
+        concentrado,
+        tmp_path,
+        compare_output_dir=Path("data") / "processed",
+    )
+
+    assert result["status"] == "blocked"
+    assert result["action"] == "block"
+    assert "data/processed" in result["error_message"]
+    assert not (tmp_path / "data" / "processed" / "raw_compare_manifest.json").exists()
+
+
+def test_publish_rejects_data_processed_compare_output_dir_child(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _, plan_path, _, concentrado = _make_insert_candidate_plan(tmp_path)
+
+    result, _ = _publish(
+        plan_path,
+        concentrado,
+        tmp_path,
+        compare_output_dir=Path("data") / "processed" / "compare",
+    )
+
+    assert result["status"] == "blocked"
+    assert result["action"] == "block"
+    assert "data/processed" in result["error_message"]
+    assert not (tmp_path / "data" / "processed" / "compare").exists()
+
+
+def test_cli_returns_parseable_json_for_disallowed_output_dir(tmp_path):
+    import subprocess
+    import sys
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve().parents[1] / "scripts" / "publish_imss_aggregate.py"),
+            "--publish-plan",
+            "missing.json",
+            "--output-dir",
+            "data/processed",
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    payload = json.loads(completed.stdout)
+    assert completed.returncode != 0
+    assert payload == {
+        "status": "blocked",
+        "action": "block",
+        "publish_manifest_path": None,
+        "result": {
+            "status": "blocked",
+            "action": "block",
+            "validation_status": "blocked",
+            "would_write": False,
+            "error_message": "output_dir cannot be data/processed or a child of data/processed",
+        },
+    }
+    assert not (tmp_path / "data" / "processed").exists()

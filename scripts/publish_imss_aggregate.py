@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.imss_engine.publish_insert import publish_imss_aggregate_from_plan
+from src.imss_engine.publish_insert import PublishBlockedError, publish_imss_aggregate_from_plan
 
 
 def main() -> None:
@@ -27,11 +27,28 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    result, manifest_path = publish_imss_aggregate_from_plan(
-        args.publish_plan,
-        concentrado_file=args.concentrado_file,
-        output_dir=args.output_dir,
-    )
+    try:
+        result, manifest_path = publish_imss_aggregate_from_plan(
+            args.publish_plan,
+            concentrado_file=args.concentrado_file,
+            output_dir=args.output_dir,
+        )
+    except PublishBlockedError as exc:
+        payload = {
+            "status": "blocked",
+            "action": "block",
+            "publish_manifest_path": None,
+            "result": {
+                "status": "blocked",
+                "action": "block",
+                "validation_status": "blocked",
+                "would_write": False,
+                "error_message": str(exc),
+            },
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        raise SystemExit(1) from exc
+
     payload = {
         "status": result["status"],
         "action": result["action"],

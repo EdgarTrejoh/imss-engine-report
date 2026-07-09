@@ -325,6 +325,8 @@ def publish_imss_aggregate_from_plan(
     compare_dir = compare_output_dir if compare_output_dir is not None else output_dir
 
     try:
+        if compare_output_dir is not None:
+            _ensure_output_dir_allowed(compare_output_dir)
         plan_path = Path(publish_plan)
         plan = _load_publish_plan(plan_path)
         manifest["publish_plan_sha256"] = calculate_sha256(plan_path)
