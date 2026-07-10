@@ -10,6 +10,7 @@ from src.imss_engine.historical_batch_planner import (
     execute_historical_batch,
     generate_month_end_periods,
     plan_historical_batch,
+    resolve_historical_batch_config,
 )
 
 
@@ -80,6 +81,34 @@ def _deps(calls, states, *, execute_results=None):
         check_existing=check_existing,
         execute_single_period=execute_single_period,
     )
+
+
+def _write_batch_config(path, **overrides):
+    values = {
+        "enabled": True,
+        "mode": "dry_run",
+        "start_period": "2017-01-31",
+        "end_period": "2017-03-31",
+        "max_periods_per_run": 3,
+        "stop_on_failure": True,
+        "raw_root": "configured/raw",
+        "output_dir": "configured/outputs",
+        "chunk_size": 123,
+        "batch_size": 456,
+        "promotion_batch_size": 789,
+    }
+    values.update(overrides)
+    lines = ["imss_historical_batch:"]
+    for key, value in values.items():
+        if isinstance(value, bool):
+            rendered = str(value).lower()
+        elif isinstance(value, str):
+            rendered = f'"{value}"'
+        else:
+            rendered = str(value)
+        lines.append(f"  {key}: {rendered}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
 
 
 def test_generates_month_end_periods_between_start_and_end():
@@ -589,3 +618,170 @@ def test_cli_execute_prints_valid_json(capsys, monkeypatch, tmp_path):
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "success"
     assert payload["action"] == "no_op"
+
+
+def test_config_driven_dry_run_resolves_values_and_sources(tmp_path):
+    config_path = _write_batch_config(tmp_path / "config.yaml")
+
+    effective = resolve_historical_batch_config(config_path=config_path)
+
+    assert effective["mode"] == "dry_run"
+    assert effective["start_period"] == "2017-01-31"
+    assert effective["end_period"] == "2017-03-31"
+    assert effective["raw_root"] == "configured/raw"
+    assert effective["sources"]["mode"] == "config"
+    assert effective["sources"]["start_period"] == "config"
+
+
+def test_config_driven_execute_resolves_max_periods(tmp_path):
+    config_path = _write_batch_config(tmp_path / "config.yaml", mode="execute", max_periods_per_run=2)
+
+    effective = resolve_historical_batch_config(config_path=config_path)
+
+    assert effective["mode"] == "execute"
+    assert effective["max_periods"] == 2
+    assert effective["stop_on_failure"] is True
+    assert effective["sources"]["max_periods"] == "config"
+
+
+def test_cli_period_overrides_win_over_config(tmp_path):
+    config_path = _write_batch_config(tmp_path / "config.yaml")
+
+    effective = resolve_historical_batch_config(
+        config_path=config_path,
+        cli_start_period="2017-04-30",
+        cli_end_period="2017-06-30",
+    )
+
+    assert effective["start_period"] == "2017-04-30"
+    assert effective["end_period"] == "2017-06-30"
+    assert effective["sources"]["start_period"] == "cli"
+    assert effective["sources"]["end_period"] == "cli"
+
+
+def test_cli_mode_and_max_periods_overrides_win_over_config(tmp_path):
+    config_path = _write_batch_config(tmp_path / "config.yaml", mode="dry_run", max_periods_per_run=3)
+
+    effective = resolve_historical_batch_config(
+        config_path=config_path,
+        cli_mode="execute",
+        cli_max_periods=1,
+        cli_stop_on_failure=True,
+    )
+
+    assert effective["mode"] == "execute"
+    assert effective["max_periods"] == 1
+    assert effective["sources"]["mode"] == "cli"
+    assert effective["sources"]["max_periods"] == "cli"
+
+
+def test_execute_without_max_periods_in_cli_or_config_fails(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "imss_historical_batch:\n"
+        "  enabled: true\n"
+        "  mode: execute\n"
+        "  start_period: '2017-01-31'\n"
+        "  end_period: '2017-03-31'\n"
+        "  stop_on_failure: true\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="requires --max-periods"):
+        resolve_historical_batch_config(config_path=config_path)
+
+
+def test_execute_rejects_config_max_periods_greater_than_three(tmp_path):
+    config_path = _write_batch_config(tmp_path / "config.yaml", mode="execute", max_periods_per_run=4)
+
+    with pytest.raises(ValueError, match="greater than 3"):
+        resolve_historical_batch_config(config_path=config_path)
+
+
+def test_execute_rejects_config_stop_on_failure_false(tmp_path):
+    config_path = _write_batch_config(tmp_path / "config.yaml", mode="execute", stop_on_failure=False)
+
+    with pytest.raises(ValueError, match="stop_on_failure=true"):
+        resolve_historical_batch_config(config_path=config_path)
+
+
+def test_missing_config_section_without_sufficient_cli_fails(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("etl: {}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="mode must be"):
+        resolve_historical_batch_config(config_path=config_path)
+
+
+def test_disabled_config_without_explicit_cli_fails(tmp_path):
+    config_path = _write_batch_config(tmp_path / "config.yaml", enabled=False)
+
+    with pytest.raises(ValueError, match="enabled is false"):
+        resolve_historical_batch_config(config_path=config_path)
+
+
+def test_disabled_config_allows_explicit_cli_mode_and_periods(tmp_path):
+    config_path = _write_batch_config(tmp_path / "config.yaml", enabled=False)
+
+    effective = resolve_historical_batch_config(
+        config_path=config_path,
+        cli_mode="dry_run",
+        cli_start_period="2017-04-30",
+        cli_end_period="2017-06-30",
+    )
+
+    assert effective["mode"] == "dry_run"
+    assert effective["start_period"] == "2017-04-30"
+    assert effective["enabled"] is False
+
+
+def test_plan_manifest_includes_effective_config(tmp_path):
+    effective = {
+        "mode": "dry_run",
+        "max_periods": 3,
+        "stop_on_failure": True,
+        "sources": {"mode": "config"},
+    }
+    plan, manifest_path = plan_historical_batch(
+        start_period="2017-01-31",
+        end_period="2017-01-31",
+        raw_root=tmp_path / "raw",
+        output_dir=tmp_path / "outputs",
+        effective_config=effective,
+        dependencies=_deps([], {}),
+    )
+
+    stored = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert plan["effective_config"] == effective
+    assert stored["effective_config"] == effective
+    assert stored["config_section"] == "imss_historical_batch"
+    assert stored["writes_concentrado"] is False
+    assert stored["writes_data_processed"] is False
+
+
+def test_cli_config_driven_mode_prints_valid_json(capsys, monkeypatch, tmp_path):
+    config_path = _write_batch_config(tmp_path / "config.yaml")
+
+    def fake_plan(**kwargs):
+        return (
+            {
+                "status": "planned",
+                "summary": {"download_process_load": 3},
+                "periods": [],
+                "effective_config": kwargs["effective_config"],
+            },
+            tmp_path / "historical_batch_plan.json",
+        )
+
+    monkeypatch.setattr(run_imss_historical_batch, "plan_historical_batch", fake_plan)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["run_imss_historical_batch.py", "--config", str(config_path)],
+    )
+
+    run_imss_historical_batch.main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "planned"
+    assert payload["effective_config"]["mode"] == "dry_run"
+    assert payload["effective_config"]["sources"]["start_period"] == "config"
