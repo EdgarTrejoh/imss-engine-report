@@ -7,12 +7,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.imss_engine.historical_batch_planner import plan_historical_batch
+from src.imss_engine.historical_batch_planner import execute_historical_batch, plan_historical_batch
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Plan historical IMSS single-period pipeline work in dry-run mode."
+        description="Plan or execute bounded historical IMSS single-period pipeline work."
     )
     parser.add_argument("--config", default="config/config.yaml", help="Config YAML path.")
     parser.add_argument("--start-period", required=True, help="Inclusive month-end start period.")
@@ -21,7 +21,14 @@ def main() -> None:
     parser.add_argument(
         "--execute",
         action="store_true",
-        help="Reserved for a future PR. Execution is not implemented in PR #41.",
+        help="Execute a bounded historical batch by delegating to the single-period pipeline.",
+    )
+    parser.add_argument("--max-periods", type=int, default=None, help="Maximum periods to execute. Required for --execute.")
+    parser.add_argument(
+        "--stop-on-failure",
+        action="store_true",
+        default=True,
+        help="Stop after the first failed period. Required behavior for PR #42.",
     )
     parser.add_argument(
         "--raw-root",
@@ -34,28 +41,56 @@ def main() -> None:
         help="Directory for historical batch plan manifests.",
     )
     parser.add_argument("--run-id", default=None, help="Optional explicit run_id.")
+    parser.add_argument("--chunk-size", type=int, default=400000, help="Raw CSV processing chunk size.")
+    parser.add_argument("--batch-size", type=int, default=5000, help="PostgreSQL staging batch size.")
+    parser.add_argument(
+        "--promotion-batch-size",
+        type=int,
+        default=50000,
+        help="PostgreSQL staging-to-final promotion batch size.",
+    )
     args = parser.parse_args()
 
-    if args.execute:
-        print("Historical batch execute is out of scope for PR #41. Use --dry-run only.", file=sys.stderr)
+    if args.dry_run == args.execute:
+        print("Use exactly one of --dry-run or --execute.", file=sys.stderr)
         raise SystemExit(2)
-    if not args.dry_run:
-        print("--dry-run is required. Historical batch execution is not implemented.", file=sys.stderr)
+    if args.execute and args.max_periods is None:
+        print("--execute requires --max-periods.", file=sys.stderr)
+        raise SystemExit(2)
+    if args.max_periods is not None and args.max_periods > 3:
+        print("--max-periods cannot be greater than 3.", file=sys.stderr)
         raise SystemExit(2)
 
     try:
-        plan, manifest_path = plan_historical_batch(
-            config_path=args.config,
-            start_period=args.start_period,
-            end_period=args.end_period,
-            raw_root=args.raw_root,
-            output_dir=args.output_dir,
-            run_id=args.run_id,
-        )
+        if args.dry_run:
+            result, manifest_path = plan_historical_batch(
+                config_path=args.config,
+                start_period=args.start_period,
+                end_period=args.end_period,
+                raw_root=args.raw_root,
+                output_dir=args.output_dir,
+                run_id=args.run_id,
+            )
+            action = "historical_batch_plan"
+        else:
+            result, manifest_path = execute_historical_batch(
+                config_path=args.config,
+                start_period=args.start_period,
+                end_period=args.end_period,
+                raw_root=args.raw_root,
+                output_dir=args.output_dir,
+                run_id=args.run_id,
+                max_periods=args.max_periods,
+                stop_on_failure=args.stop_on_failure,
+                chunk_size=args.chunk_size,
+                batch_size=args.batch_size,
+                promotion_batch_size=args.promotion_batch_size,
+            )
+            action = result["action"]
     except Exception as error:
         payload = {
             "status": "failed",
-            "action": "historical_batch_plan",
+            "action": "failed",
             "manifest_path": None,
             "summary": None,
             "periods": [],
@@ -65,13 +100,17 @@ def main() -> None:
         raise SystemExit(1) from error
 
     payload = {
-        "status": plan["status"],
-        "action": "historical_batch_plan",
+        "status": result["status"],
+        "action": action,
         "manifest_path": str(manifest_path),
-        "summary": plan["summary"],
-        "periods": plan["periods"],
+        "summary": result.get("summary"),
+        "periods": result.get("periods"),
+        "result": result,
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+
+    if result["status"] == "failed":
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

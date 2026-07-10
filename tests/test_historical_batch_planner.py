@@ -7,6 +7,7 @@ from scripts import run_imss_historical_batch
 from src.imss_engine.download import build_raw_file_path
 from src.imss_engine.historical_batch_planner import (
     HistoricalBatchPlannerDependencies,
+    execute_historical_batch,
     generate_month_end_periods,
     plan_historical_batch,
 )
@@ -42,7 +43,9 @@ def _pg_state(
     }
 
 
-def _deps(calls, states):
+def _deps(calls, states, *, execute_results=None):
+    execute_results = execute_results or {}
+
     def connect(config):
         calls.append("connect")
         return _Connection(calls)
@@ -53,10 +56,29 @@ def _deps(calls, states):
         state["periodo_informacion"] = period
         return state
 
+    def execute_single_period(**kwargs):
+        period = kwargs["period"]
+        calls.append(f"execute_single_period:{period}")
+        result = execute_results.get(period)
+        if result is None:
+            result = {
+                "run_id": f"single_{period}",
+                "status": "success",
+                "action": "loaded",
+                "postgres": {
+                    "validate_post_promotion": {
+                        "final_row_count": 10,
+                    }
+                },
+                "error_message": None,
+            }
+        return result, Path("outputs") / f"single_{period}.json"
+
     return HistoricalBatchPlannerDependencies(
         postgres_config_from_env=lambda: _Config(),
         connect_postgres=connect,
         check_existing=check_existing,
+        execute_single_period=execute_single_period,
     )
 
 
@@ -280,7 +302,7 @@ def test_source_does_not_reference_concentrado_or_publish_modules():
     assert "raw_compare" not in source
 
 
-def test_cli_rejects_execute(capsys, monkeypatch):
+def test_cli_execute_requires_max_periods(capsys, monkeypatch):
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -297,7 +319,29 @@ def test_cli_rejects_execute(capsys, monkeypatch):
         run_imss_historical_batch.main()
 
     assert exc.value.code == 2
-    assert "out of scope" in capsys.readouterr().err
+    assert "requires --max-periods" in capsys.readouterr().err
+
+
+def test_cli_rejects_max_periods_greater_than_three(capsys, monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run_imss_historical_batch.py",
+            "--start-period",
+            "2016-08-31",
+            "--end-period",
+            "2016-12-31",
+            "--execute",
+            "--max-periods",
+            "4",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        run_imss_historical_batch.main()
+
+    assert exc.value.code == 2
+    assert "greater than 3" in capsys.readouterr().err
 
 
 def test_cli_prints_valid_json(capsys, monkeypatch, tmp_path):
@@ -330,3 +374,218 @@ def test_cli_prints_valid_json(capsys, monkeypatch, tmp_path):
     assert payload["status"] == "planned"
     assert payload["action"] == "historical_batch_plan"
     assert payload["periods"] == [{"periodo_informacion": "2016-08-31"}]
+
+
+def test_execute_selects_only_eligible_actions_and_excludes_skip_and_blocked(tmp_path):
+    calls = []
+    states = {
+        "2016-08-31": _pg_state(),
+        "2016-09-30": _pg_state(
+            exists=True,
+            final_table_row_count=10,
+            period_control_exists=True,
+            period_control_status="loaded",
+        ),
+        "2016-10-31": _pg_state(
+            exists=True,
+            period_control_exists=True,
+            period_control_status="pending",
+        ),
+    }
+
+    manifest, _ = execute_historical_batch(
+        start_period="2016-08-31",
+        end_period="2016-10-31",
+        raw_root=tmp_path / "raw",
+        output_dir=tmp_path / "outputs",
+        max_periods=3,
+        dependencies=_deps(calls, states),
+    )
+
+    assert manifest["status"] == "success"
+    assert manifest["action"] == "executed"
+    assert manifest["selected_period_count"] == 1
+    assert manifest["executed_period_count"] == 1
+    assert "execute_single_period:2016-08-31" in calls
+    assert "execute_single_period:2016-09-30" not in calls
+    assert "execute_single_period:2016-10-31" not in calls
+    assert manifest["skipped_existing_count"] == 1
+    assert manifest["blocked_count"] == 1
+
+
+def test_execute_respects_max_periods_and_records_not_selected(tmp_path):
+    calls = []
+    manifest, _ = execute_historical_batch(
+        start_period="2016-08-31",
+        end_period="2016-12-31",
+        raw_root=tmp_path / "raw",
+        output_dir=tmp_path / "outputs",
+        max_periods=3,
+        dependencies=_deps(calls, {}),
+    )
+
+    assert manifest["eligible_period_count"] == 5
+    assert manifest["selected_period_count"] == 3
+    assert manifest["executed_period_count"] == 3
+    assert manifest["not_selected_periods"] == ["2016-11-30", "2016-12-31"]
+    assert calls.count("execute_single_period:2016-08-31") == 1
+    assert calls.count("execute_single_period:2016-09-30") == 1
+    assert calls.count("execute_single_period:2016-10-31") == 1
+    assert "execute_single_period:2016-11-30" not in calls
+
+
+def test_execute_calls_single_period_once_per_selected_period(tmp_path):
+    calls = []
+    execute_historical_batch(
+        start_period="2016-08-31",
+        end_period="2016-09-30",
+        raw_root=tmp_path / "raw",
+        output_dir=tmp_path / "outputs",
+        max_periods=2,
+        dependencies=_deps(calls, {}),
+    )
+
+    executed = [call for call in calls if call.startswith("execute_single_period:")]
+    assert executed == ["execute_single_period:2016-08-31", "execute_single_period:2016-09-30"]
+
+
+def test_stop_on_failure_stops_after_first_failed_period(tmp_path):
+    calls = []
+    manifest, _ = execute_historical_batch(
+        start_period="2016-08-31",
+        end_period="2016-10-31",
+        raw_root=tmp_path / "raw",
+        output_dir=tmp_path / "outputs",
+        max_periods=3,
+        dependencies=_deps(
+            calls,
+            {},
+            execute_results={
+                "2016-09-30": {
+                    "run_id": "single_2016-09-30",
+                    "status": "failed",
+                    "action": "failed",
+                    "postgres": {},
+                    "error_message": "boom",
+                }
+            },
+        ),
+    )
+
+    assert manifest["status"] == "failed"
+    assert manifest["action"] == "failed"
+    assert manifest["failed_period_count"] == 1
+    assert manifest["stopped_after_failure"] is True
+    assert manifest["error_period"] == "2016-09-30"
+    assert manifest["not_selected_periods"] == ["2016-10-31"]
+    assert "execute_single_period:2016-10-31" not in calls
+
+
+def test_execute_no_eligible_periods_returns_success_no_op(tmp_path):
+    calls = []
+    states = {
+        "2016-08-31": _pg_state(
+            exists=True,
+            final_table_row_count=10,
+            period_control_exists=True,
+            period_control_status="loaded",
+        )
+    }
+
+    manifest, _ = execute_historical_batch(
+        start_period="2016-08-31",
+        end_period="2016-08-31",
+        raw_root=tmp_path / "raw",
+        output_dir=tmp_path / "outputs",
+        max_periods=3,
+        dependencies=_deps(calls, states),
+    )
+
+    assert manifest["status"] == "success"
+    assert manifest["action"] == "no_op"
+    assert manifest["writes_postgresql"] is False
+    assert not any(call.startswith("execute_single_period:") for call in calls)
+
+
+def test_execute_manifest_flags_for_successful_execution(tmp_path):
+    calls = []
+    manifest, manifest_path = execute_historical_batch(
+        start_period="2016-08-31",
+        end_period="2016-08-31",
+        raw_root=tmp_path / "raw",
+        output_dir=tmp_path / "outputs",
+        max_periods=1,
+        dependencies=_deps(calls, {}),
+    )
+
+    assert manifest["status"] == "success"
+    assert manifest["writes_postgresql"] is True
+    assert manifest["writes_concentrado"] is False
+    assert manifest["writes_data_processed"] is False
+    assert manifest["downloads_raw"] is True
+    assert manifest["processes_raw"] is True
+    assert manifest["touches_staging_table"] is True
+    assert manifest["touches_final_table"] is True
+    assert manifest_path.exists()
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["mode"] == "historical_batch_execute"
+
+
+def test_execute_rejects_continue_on_failure_for_pr42(tmp_path):
+    with pytest.raises(ValueError, match="stop-on-failure"):
+        execute_historical_batch(
+            start_period="2016-08-31",
+            end_period="2016-08-31",
+            raw_root=tmp_path / "raw",
+            output_dir=tmp_path / "outputs",
+            max_periods=1,
+            stop_on_failure=False,
+            dependencies=_deps([], {}),
+        )
+
+
+def test_execute_rejects_more_than_three_periods(tmp_path):
+    with pytest.raises(ValueError, match="greater than 3"):
+        execute_historical_batch(
+            start_period="2016-08-31",
+            end_period="2016-08-31",
+            raw_root=tmp_path / "raw",
+            output_dir=tmp_path / "outputs",
+            max_periods=4,
+            dependencies=_deps([], {}),
+        )
+
+
+def test_cli_execute_prints_valid_json(capsys, monkeypatch, tmp_path):
+    def fake_execute(**kwargs):
+        return (
+            {
+                "status": "success",
+                "action": "no_op",
+                "summary": None,
+                "periods": None,
+                "executions": [],
+            },
+            tmp_path / "outputs" / "historical_batch_execute.json",
+        )
+
+    monkeypatch.setattr(run_imss_historical_batch, "execute_historical_batch", fake_execute)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run_imss_historical_batch.py",
+            "--start-period",
+            "2016-08-31",
+            "--end-period",
+            "2016-08-31",
+            "--execute",
+            "--max-periods",
+            "1",
+            "--stop-on-failure",
+        ],
+    )
+
+    run_imss_historical_batch.main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "success"
+    assert payload["action"] == "no_op"
