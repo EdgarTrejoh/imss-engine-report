@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from .config import load_config
 from .download import DEFAULT_RAW_ROOT, build_raw_file_path, now_utc_iso, validate_period
 from .postgres.config import PostgresConfig
 from .postgres.connection import connect
@@ -18,6 +19,7 @@ from .single_period_pipeline import execute_single_period_pipeline
 
 
 DEFAULT_BATCH_OUTPUT_DIR = Path("outputs/pipeline")
+HISTORICAL_BATCH_CONFIG_SECTION = "imss_historical_batch"
 ELIGIBLE_EXECUTE_ACTIONS = {"download_process_load", "validate_process_load"}
 MAX_BATCH_EXECUTE_PERIODS = 3
 PLANNER_ACTIONS = (
@@ -29,6 +31,14 @@ PLANNER_ACTIONS = (
     "blocked_partial_final",
     "blocked_inconsistent_state",
 )
+HISTORICAL_BATCH_DEFAULTS = {
+    "raw_root": str(DEFAULT_RAW_ROOT),
+    "output_dir": str(DEFAULT_BATCH_OUTPUT_DIR),
+    "chunk_size": 400000,
+    "batch_size": 5000,
+    "promotion_batch_size": 50000,
+    "stop_on_failure": True,
+}
 
 
 @dataclass(frozen=True)
@@ -42,6 +52,125 @@ class HistoricalBatchPlannerDependencies:
 def generate_historical_batch_run_id() -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"historical_batch_{timestamp}_{uuid.uuid4().hex[:8]}"
+
+
+def resolve_historical_batch_config(
+    *,
+    config_path: str | Path,
+    cli_mode: str | None = None,
+    cli_start_period: str | None = None,
+    cli_end_period: str | None = None,
+    cli_max_periods: int | None = None,
+    cli_stop_on_failure: bool | None = None,
+    cli_raw_root: str | Path | None = None,
+    cli_output_dir: str | Path | None = None,
+    cli_chunk_size: int | None = None,
+    cli_batch_size: int | None = None,
+    cli_promotion_batch_size: int | None = None,
+) -> dict:
+    """Resolve historical batch settings with CLI > config > safe defaults."""
+    config = load_config(config_path) or {}
+    section = config.get(HISTORICAL_BATCH_CONFIG_SECTION)
+    if section is None:
+        section = {}
+    if not isinstance(section, dict):
+        raise ValueError(f"{HISTORICAL_BATCH_CONFIG_SECTION} must be a mapping")
+
+    cli_explicit = bool(cli_mode and cli_start_period and cli_end_period)
+    if section.get("enabled") is False and not cli_explicit:
+        raise ValueError(
+            f"{HISTORICAL_BATCH_CONFIG_SECTION}.enabled is false; provide explicit CLI mode and periods to override"
+        )
+
+    def resolve(name: str, cli_value, config_name: str | None = None, default=None):
+        if cli_value is not None:
+            return cli_value, "cli"
+        key = config_name or name
+        if key in section and section[key] is not None:
+            return section[key], "config"
+        return default, "default"
+
+    mode, mode_source = resolve("mode", cli_mode)
+    start_period, start_source = resolve("start_period", cli_start_period)
+    end_period, end_source = resolve("end_period", cli_end_period)
+    max_periods, max_source = resolve(
+        "max_periods", cli_max_periods, "max_periods_per_run"
+    )
+    stop_on_failure, stop_source = resolve(
+        "stop_on_failure",
+        cli_stop_on_failure,
+        default=HISTORICAL_BATCH_DEFAULTS["stop_on_failure"],
+    )
+    raw_root, raw_root_source = resolve(
+        "raw_root", cli_raw_root, default=HISTORICAL_BATCH_DEFAULTS["raw_root"]
+    )
+    output_dir, output_dir_source = resolve(
+        "output_dir", cli_output_dir, default=HISTORICAL_BATCH_DEFAULTS["output_dir"]
+    )
+    chunk_size, chunk_size_source = resolve(
+        "chunk_size", cli_chunk_size, default=HISTORICAL_BATCH_DEFAULTS["chunk_size"]
+    )
+    batch_size, batch_size_source = resolve(
+        "batch_size", cli_batch_size, default=HISTORICAL_BATCH_DEFAULTS["batch_size"]
+    )
+    promotion_batch_size, promotion_source = resolve(
+        "promotion_batch_size",
+        cli_promotion_batch_size,
+        default=HISTORICAL_BATCH_DEFAULTS["promotion_batch_size"],
+    )
+
+    if mode not in {"dry_run", "execute"}:
+        raise ValueError("historical batch mode must be dry_run or execute")
+    if not start_period or not end_period:
+        raise ValueError("start-period and end-period are required in CLI or imss_historical_batch config")
+    start_period = validate_period(str(start_period))
+    end_period = validate_period(str(end_period))
+    if mode == "execute" and max_periods is None:
+        raise ValueError("execute requires --max-periods in CLI or max_periods_per_run in config")
+    if max_periods is not None:
+        max_periods = int(max_periods)
+        if max_periods <= 0:
+            raise ValueError("max-periods must be greater than zero")
+        if max_periods > MAX_BATCH_EXECUTE_PERIODS:
+            raise ValueError(f"max-periods cannot be greater than {MAX_BATCH_EXECUTE_PERIODS}")
+    if mode == "execute" and stop_on_failure is not True:
+        raise ValueError("execute requires stop_on_failure=true")
+
+    numeric_values = {
+        "chunk_size": chunk_size,
+        "batch_size": batch_size,
+        "promotion_batch_size": promotion_batch_size,
+    }
+    for name, value in numeric_values.items():
+        numeric_values[name] = int(value)
+        if numeric_values[name] <= 0:
+            raise ValueError(f"{name} must be greater than zero")
+
+    return {
+        "config_path": str(config_path),
+        "config_section": HISTORICAL_BATCH_CONFIG_SECTION,
+        "enabled": section.get("enabled", True),
+        "mode": mode,
+        "start_period": start_period,
+        "end_period": end_period,
+        "max_periods": max_periods,
+        "stop_on_failure": stop_on_failure,
+        "raw_root": str(raw_root),
+        "output_dir": str(output_dir),
+        **numeric_values,
+        "sources": {
+            "mode": mode_source,
+            "start_period": start_source,
+            "end_period": end_source,
+            "max_periods": max_source,
+            "stop_on_failure": stop_source,
+            "raw_root": raw_root_source,
+            "output_dir": output_dir_source,
+            "chunk_size": chunk_size_source,
+            "batch_size": batch_size_source,
+            "promotion_batch_size": promotion_source,
+        },
+    }
 
 
 def _parse_period_date(period: str) -> datetime:
@@ -173,6 +302,7 @@ def plan_historical_batch(
     raw_root: str | Path = DEFAULT_RAW_ROOT,
     output_dir: str | Path = DEFAULT_BATCH_OUTPUT_DIR,
     run_id: str | None = None,
+    effective_config: dict | None = None,
     dependencies: HistoricalBatchPlannerDependencies = HistoricalBatchPlannerDependencies(),
 ) -> tuple[dict, Path]:
     """Plan historical single-period pipeline work without downloads, processing or writes."""
@@ -203,8 +333,13 @@ def plan_historical_batch(
     plan = {
         "run_id": effective_run_id,
         "mode": "historical_batch_planner",
+        "batch_mode": (effective_config or {}).get("mode", "dry_run"),
         "dry_run": True,
         "config_path": str(config_path),
+        "config_section": HISTORICAL_BATCH_CONFIG_SECTION,
+        "effective_config": effective_config,
+        "max_periods": (effective_config or {}).get("max_periods"),
+        "stop_on_failure": (effective_config or {}).get("stop_on_failure", True),
         "start_period": validate_period(start_period),
         "end_period": validate_period(end_period),
         "period_count": len(periods),
@@ -245,6 +380,8 @@ def _base_execute_manifest(
     max_periods: int,
     stop_on_failure: bool,
     started_at: str,
+    config_path: str | Path,
+    effective_config: dict | None,
 ) -> dict:
     skipped_existing = [
         item["periodo_informacion"]
@@ -259,7 +396,11 @@ def _base_execute_manifest(
     return {
         "run_id": run_id,
         "mode": "historical_batch_execute",
+        "batch_mode": (effective_config or {}).get("mode", "execute"),
         "dry_run": False,
+        "config_path": str(config_path),
+        "config_section": HISTORICAL_BATCH_CONFIG_SECTION,
+        "effective_config": effective_config,
         "status": None,
         "action": None,
         "start_period": plan["start_period"],
@@ -313,6 +454,7 @@ def execute_historical_batch(
     chunk_size: int = 400000,
     batch_size: int = 5000,
     promotion_batch_size: int = 50000,
+    effective_config: dict | None = None,
     dependencies: HistoricalBatchPlannerDependencies = HistoricalBatchPlannerDependencies(),
 ) -> tuple[dict, Path]:
     """Execute a bounded historical batch by delegating each period to the single-period pipeline."""
@@ -331,6 +473,7 @@ def execute_historical_batch(
         raw_root=raw_root,
         output_dir=output_dir,
         run_id=f"{effective_run_id}_plan",
+        effective_config=effective_config,
         dependencies=dependencies,
     )
     selected, not_selected = _selected_periods(plan, max_periods)
@@ -346,6 +489,8 @@ def execute_historical_batch(
         max_periods=max_periods,
         stop_on_failure=stop_on_failure,
         started_at=now_utc_iso(),
+        config_path=config_path,
+        effective_config=effective_config,
     )
     manifest["eligible_period_count"] = eligible_count
     manifest["selected_period_count"] = len(selected)
