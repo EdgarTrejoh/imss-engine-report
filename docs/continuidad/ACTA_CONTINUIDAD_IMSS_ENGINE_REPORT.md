@@ -413,3 +413,22 @@ Continuar desde:
 ```text
 Siguiente paso sugerido: PR #24 para downloader histórico por periodo con manifest, sin carga automática.
 ```
+
+---
+
+## Actualización — PR #40 single-period pipeline validado
+
+Después del merge de PR #39 se ejecutó exitosamente el orquestador single-period para `2016-07-31`.
+
+Resultado operativo:
+
+- `status`: `success`
+- `action`: `loaded`
+- PostgreSQL local quedó con 8 periodos cargados.
+- `2016-07-31` quedó en `period_control` con status `loaded`.
+- `run_manifest` quedó en status `completed`.
+- La validación post-promoción quedó en `passed`.
+
+Documento de referencia:
+
+`docs/continuidad/PR40_SINGLE_PERIOD_PIPELINE_EXECUTION_CHECKPOINT.md`
