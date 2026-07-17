@@ -25,7 +25,12 @@ def main() -> None:
         default="outputs/audit/raw_validation",
         help="Directory for local raw validation manifests.",
     )
-    parser.add_argument("--encoding", default="latin-1", help="Expected raw file encoding.")
+    parser.add_argument(
+        "--encoding",
+        choices=("auto", "latin-1", "utf-8-sig"),
+        default="auto",
+        help="Raw encoding resolution mode.",
+    )
     parser.add_argument("--separator", default="|", help="Expected raw file separator.")
     args = parser.parse_args()
 

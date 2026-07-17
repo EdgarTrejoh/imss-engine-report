@@ -15,28 +15,17 @@ from .download import (
     now_utc_iso,
     validate_period,
 )
-from .schema import CRITICAL_METRIC_COLUMNS
+from .raw_encoding import (
+    DEFAULT_RAW_ENCODING,
+    DEFAULT_RAW_SEPARATOR,
+    REQUIRED_RAW_COLUMNS,
+    REQUIRED_RAW_DIMENSION_COLUMNS,
+    RawEncodingOrSchemaError,
+    resolve_raw_encoding,
+)
 
 
 DEFAULT_RAW_VALIDATION_MANIFEST_DIR = Path("outputs/audit/raw_validation")
-DEFAULT_RAW_ENCODING = "latin-1"
-DEFAULT_RAW_SEPARATOR = "|"
-REQUIRED_RAW_DIMENSION_COLUMNS: tuple[str, ...] = (
-    "cve_delegacion",
-    "cve_subdelegacion",
-    "cve_entidad",
-    "cve_municipio",
-    "sector_economico_1",
-    "sector_economico_2",
-    "sector_economico_4",
-    "tamaño_patron",
-    "sexo",
-    "rango_edad",
-    "rango_salarial",
-)
-REQUIRED_RAW_COLUMNS: tuple[str, ...] = REQUIRED_RAW_DIMENSION_COLUMNS + CRITICAL_METRIC_COLUMNS
-
-
 def generate_raw_validation_run_id() -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"{timestamp}_{uuid.uuid4().hex[:8]}"
@@ -77,7 +66,11 @@ def _base_manifest(
         "raw_exists": raw_file_path.exists(),
         "file_size_bytes": None,
         "sha256": None,
-        "encoding": encoding,
+        "encoding": None,
+        "encoding_requested": encoding,
+        "encoding_detected": None,
+        "encoding_candidates_tried": [],
+        "candidate_diagnostics": [],
         "separator": separator,
         "columns_detected": [],
         "missing_required_columns": [],
@@ -95,11 +88,6 @@ def _finish(manifest: dict, *, status: str, valid: bool, error_message: str | No
     manifest["error_message"] = error_message
     manifest["finished_at"] = now_utc_iso()
     return manifest
-
-
-def _read_header(path: Path, encoding: str) -> str:
-    with path.open("r", encoding=encoding, newline="") as file:
-        return file.readline()
 
 
 def validate_imss_raw(
@@ -133,13 +121,25 @@ def validate_imss_raw(
 
     try:
         manifest["sha256"] = calculate_sha256(raw_file_path)
-        header_line = _read_header(raw_file_path, encoding)
-    except UnicodeError as error:
+        resolution = resolve_raw_encoding(
+            raw_file_path,
+            separator=separator,
+            encoding=encoding,
+        )
+    except RawEncodingOrSchemaError as error:
+        manifest.update(error.resolution.to_dict())
+        status_by_reason = {
+            "empty_header": "failed_empty_header",
+            "invalid_separator": "failed_invalid_separator",
+            "unreadable_header": "failed_unreadable_raw",
+            "missing_required_columns": "failed_missing_required_columns",
+        }
+        status = status_by_reason[error.reason]
         _finish(
             manifest,
-            status="failed_unreadable_raw",
+            status=status,
             valid=False,
-            error_message=f"Raw file is not readable with encoding {encoding}: {error}",
+            error_message=str(error),
         )
         return manifest, write_raw_validation_manifest(manifest, manifest_dir)
     except OSError as error:
@@ -151,27 +151,8 @@ def validate_imss_raw(
         )
         return manifest, write_raw_validation_manifest(manifest, manifest_dir)
 
-    if separator not in header_line:
-        _finish(
-            manifest,
-            status="failed_invalid_separator",
-            valid=False,
-            error_message=f"Raw header does not contain expected separator {separator!r}.",
-        )
-        return manifest, write_raw_validation_manifest(manifest, manifest_dir)
-
-    columns = [column.strip().lstrip("\ufeff") for column in header_line.rstrip("\r\n").split(separator)]
-    manifest["columns_detected"] = columns
-    missing_required_columns = [column for column in REQUIRED_RAW_COLUMNS if column not in columns]
-    manifest["missing_required_columns"] = missing_required_columns
-    if missing_required_columns:
-        _finish(
-            manifest,
-            status="failed_missing_required_columns",
-            valid=False,
-            error_message="Raw header is missing required IMSS metric columns.",
-        )
-        return manifest, write_raw_validation_manifest(manifest, manifest_dir)
+    manifest.update(resolution.to_dict())
+    manifest["encoding"] = resolution.encoding_detected
 
     _finish(manifest, status="success", valid=True)
     return manifest, write_raw_validation_manifest(manifest, manifest_dir)

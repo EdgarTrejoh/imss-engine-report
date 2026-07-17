@@ -52,6 +52,9 @@ def _valid_raw(period="2016-07-31"):
         "valid": True,
         "status": "success",
         "raw_file_path": f"raw/asg-{period}.csv",
+        "encoding_requested": "auto",
+        "encoding_detected": "latin-1",
+        "encoding_candidates_tried": ["utf-8-sig", "latin-1"],
     }
 
 
@@ -197,7 +200,7 @@ def test_execute_with_missing_raw_calls_downloader(tmp_path):
     config = _write_config(tmp_path / "config" / "config.yaml")
     calls = []
 
-    execute_single_period_pipeline(
+    manifest, _ = execute_single_period_pipeline(
         config_path=config,
         period="2016-07-31",
         raw_root=tmp_path / "raw",
@@ -348,3 +351,42 @@ def test_execute_processes_only_one_period_from_cli_override(tmp_path):
     )
 
     assert manifest["periodo_informacion"] == "2016-08-31"
+
+
+def test_pipeline_passes_single_validation_resolution_to_processing(tmp_path):
+    config = _write_config(tmp_path / "config" / "config.yaml")
+    calls = []
+    processing_kwargs = {}
+    dependencies = _deps(calls)
+
+    def process_raw(period, **kwargs):
+        calls.append("process_raw")
+        processing_kwargs.update(kwargs)
+        return _processing_success(), Path("processing.json")
+
+    dependencies = PipelineDependencies(
+        **{
+            **dependencies.__dict__,
+            "process_raw": process_raw,
+        }
+    )
+
+    manifest, _ = execute_single_period_pipeline(
+        config_path=config,
+        period="2016-07-31",
+        raw_root=tmp_path / "raw",
+        output_dir=tmp_path / "outputs",
+        duckdb_memory_limit="384MB",
+        duckdb_threads=1,
+        dependencies=dependencies,
+    )
+
+    assert processing_kwargs["encoding"] == "latin-1"
+    assert processing_kwargs["validation_result"]["encoding_detected"] == "latin-1"
+    assert processing_kwargs["validation_manifest_path"] == Path("raw_validation.json")
+    assert processing_kwargs["duckdb_memory_limit"] == "384MB"
+    assert processing_kwargs["duckdb_threads"] == 1
+    assert "processing_engine" not in processing_kwargs
+    assert manifest["encoding_requested"] == "auto"
+    assert manifest["encoding_detected"] == "latin-1"
+    assert manifest["encoding_candidates_tried"] == ["utf-8-sig", "latin-1"]

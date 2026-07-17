@@ -6,13 +6,16 @@ Motor local en Python para descargar, transformar, agregar, auditar y trazar dat
 
 - ETL principal: `etl_imss.py`.
 - Modulos testeables: `src/imss_engine/`.
-- Auditoria oficial DuckDB: `imss_duckdb_exports.py`.
+- Procesamiento externo a memoria: `src/imss_engine/raw_processing_duckdb.py`.
+- Auditoria profunda DuckDB: `imss_duckdb_exports.py`.
 - Manifest de corrida: `src/imss_engine/manifest.py`.
 - Wrappers operativos: `scripts/`.
 - Codigo historico o exploratorio: `legacy/`.
 - Pruebas locales y CI ligero: `tests/` y `.github/workflows/tests.yml`.
 
-No existen todavia PostgreSQL, BigQuery, API, dashboard, Docker, scheduler, `full_refresh`, `upsert_period` ni carga cloud automatizada.
+PostgreSQL local insert-only, staging y promocion controlada ya estan implementados.
+No existen BigQuery, API, dashboard, Docker, scheduler, `full_refresh`,
+`upsert_period` ni carga cloud automatizada.
 
 ## Setup Limpio
 
@@ -66,6 +69,86 @@ ETL local, solo cuando se quiera descargar/procesar datos reales:
 ```
 
 No ejecutes el ETL dentro de pruebas unitarias.
+
+Procesamiento raw local:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\process_imss_raw.py --period 2025-01-31 --duckdb-memory-limit 1GB --duckdb-threads 2
+```
+
+Pandas se conserva como lector y transformador por chunks; no existe una ruta
+productiva que acumule agregados en memoria. Para archivos
+historicos de alta cardinalidad DuckDB es obligatorio: las transformaciones se
+ejecutan por chunk con la logica Python vigente, los agregados parciales se
+persisten en un directorio temporal exclusivo de la corrida y DuckDB realiza la
+consolidacion final con uso de disco. `--preserve-temporary-on-failure` conserva
+los temporales para diagnostico; por defecto se limpian.
+
+Opciones vigentes:
+
+- `--encoding auto|utf-8-sig|latin-1`.
+- `--write-parquet --parquet-compression zstd|snappy`.
+- `--preserve-temporary-on-failure`.
+
+El encoding se resuelve una sola vez por encabezado y esquema. La validacion
+registra `encoding_detected` y el procesamiento usa exactamente ese valor.
+DuckDB es el unico motor productivo de consolidacion externa. Pandas se utiliza
+exclusivamente para leer y transformar el raw por chunks. Parquet Zstandard es
+un artefacto analitico adicional; el CSV se conserva por compatibilidad.
+
+## Historical Batch
+
+Configuracion recomendada para archivos historicos grandes:
+
+```yaml
+imss_historical_batch:
+  chunk_size: 100000
+  duckdb_memory_limit: "1GB"
+  duckdb_threads: 2
+```
+
+La propagacion probada es:
+
+```text
+historical batch
+→ single-period pipeline
+→ raw processing
+→ DuckDB
+```
+
+`processing_engine` ya no es una opcion de configuracion ni un argumento CLI.
+El manifest conserva `"processing_engine": "duckdb"` como hecho de ejecucion.
+Un valor heredado `processing_engine: pandas` se rechaza explicitamente.
+
+Dry-run acotado, sin escrituras en PostgreSQL:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_imss_historical_batch.py `
+  --config .\config\config.yaml `
+  --dry-run `
+  --start-period 2025-06-30 `
+  --end-period 2025-08-31
+```
+
+El dry-run consulta PostgreSQL para clasificar los periodos, pero no descarga,
+procesa ni escribe datos. Antes de ejecutar se debe revisar el manifest y
+confirmar `processing_engine: duckdb`, `writes_postgresql: false` y las acciones
+esperadas.
+
+Ejecucion limitada a tres periodos:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_imss_historical_batch.py `
+  --config .\config\config.yaml `
+  --execute `
+  --start-period 2025-06-30 `
+  --end-period 2025-08-31 `
+  --max-periods 3 `
+  --stop-on-failure
+```
+
+Guia operativa completa:
+`docs/operations/historical_batch_duckdb.md`.
 
 ## Auditorias
 
@@ -151,7 +234,7 @@ Ejemplo `periodo_consulta`:
 ```yaml
 etl:
   base_url: "http://datos.imss.gob.mx/sites/default/files/asg-{}.csv"
-  chunk_size: 400000
+  chunk_size: 100000
   mode: "periodo_consulta"
   mes_consulta: "YYYY-MM-DD"  # ignorado en periodo_consulta
   periodo_consulta:
@@ -219,3 +302,7 @@ No ejecuta `etl_imss.py`, no descarga datos reales, no llama al portal IMSS, no 
 - `docs/restructure_notes.md`
 - `docs/known_issues.md`
 - `docs/plan_trabajo.md`
+- `docs/operations/historical_batch_duckdb.md`
+- `docs/checkpoints/2026-07-16_imss_duckdb_2025_01_checkpoint.md`
+- `docs/incidents/2025-01_dimension_dtype_incident.md` — incidente dimensional
+  por inferencia de tipos entre chunks y corrección validada de enero de 2025.

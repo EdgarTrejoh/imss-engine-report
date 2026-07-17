@@ -1,6 +1,9 @@
 import pandas as pd
 
-from src.imss_engine.dimension_normalization import normalize_imss_dimension_values
+from src.imss_engine.dimension_normalization import (
+    normalize_imss_dimension_values,
+    normalize_raw_integer_codes,
+)
 
 
 def test_normalize_blank_dimension_values_to_na_only_for_selected_columns():
@@ -74,3 +77,25 @@ def test_normalize_dimension_values_does_not_change_metric_columns_or_row_count(
     ):
         assert out[column].tolist() == df[column].tolist()
         assert out[column].sum() == df[column].sum()
+
+
+def test_normalize_raw_integer_codes_is_limited_to_approved_code_columns():
+    df = pd.DataFrame(
+        {
+            "cve_entidad": ["9.0", "1", pd.NA],
+            "cve_subdelegacion": ["54.0", "6", pd.NA],
+            "cve_municipio": ["9.0", "1.0", "A01"],
+            "rango_edad": ["9.0", "1.0", "E1"],
+            "ta": [9.0, 1.0, 0.0],
+        }
+    )
+
+    out, counts = normalize_raw_integer_codes(df)
+
+    assert out["cve_entidad"].tolist() == ["9", "1", pd.NA]
+    assert out["cve_subdelegacion"].tolist() == ["54", "6", pd.NA]
+    assert out["cve_municipio"].tolist() == ["9.0", "1.0", "A01"]
+    assert out["rango_edad"].tolist() == ["9.0", "1.0", "E1"]
+    assert out["ta"].tolist() == [9.0, 1.0, 0.0]
+    assert counts["cve_entidad"] == 1
+    assert counts["cve_subdelegacion"] == 1

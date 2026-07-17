@@ -331,11 +331,26 @@ def test_source_does_not_reference_concentrado_or_publish_modules():
     assert "raw_compare" not in source
 
 
-def test_cli_execute_requires_max_periods(capsys, monkeypatch):
+def test_cli_execute_requires_max_periods(capsys, monkeypatch, tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "imss_historical_batch:",
+                "  enabled: true",
+                '  mode: "dry_run"',
+                "  stop_on_failure: true",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(
         "sys.argv",
         [
             "run_imss_historical_batch.py",
+            "--config",
+            str(config_path),
             "--start-period",
             "2016-08-31",
             "--end-period",
@@ -371,6 +386,86 @@ def test_cli_rejects_max_periods_greater_than_three(capsys, monkeypatch):
 
     assert exc.value.code == 2
     assert "greater than 3" in capsys.readouterr().err
+
+
+def test_execute_propagates_duckdb_config_to_single_period(tmp_path):
+    config = _write_batch_config(
+        tmp_path / "config.yaml",
+        mode="execute",
+        start_period="2025-01-31",
+        end_period="2025-01-31",
+        max_periods_per_run=1,
+        chunk_size=100000,
+        duckdb_memory_limit="1GB",
+        duckdb_threads=2,
+    )
+    effective = resolve_historical_batch_config(config_path=config)
+    captured = {}
+
+    def execute_single_period(**kwargs):
+        captured.update(kwargs)
+        return {
+            "run_id": "single",
+            "status": "success",
+            "action": "loaded",
+            "postgres": {"validate_post_promotion": {"final_row_count": 1}},
+            "error_message": None,
+        }, Path("single.json")
+
+    dependencies = HistoricalBatchPlannerDependencies(
+        postgres_config_from_env=lambda: _Config(),
+        connect_postgres=lambda config: _Connection([]),
+        check_existing=lambda connection, period: _pg_state(),
+        execute_single_period=execute_single_period,
+    )
+
+    execute_historical_batch(
+        start_period="2025-01-31",
+        end_period="2025-01-31",
+        config_path=config,
+        raw_root=tmp_path / "raw",
+        output_dir=tmp_path / "outputs",
+        max_periods=1,
+        chunk_size=effective["chunk_size"],
+        duckdb_memory_limit=effective["duckdb_memory_limit"],
+        duckdb_threads=effective["duckdb_threads"],
+        effective_config=effective,
+        dependencies=dependencies,
+    )
+
+    assert "processing_engine" not in captured
+    assert effective["processing_engine"] == "duckdb"
+    assert effective["sources"]["processing_engine"] == "fixed"
+    assert captured["chunk_size"] == 100000
+    assert captured["duckdb_memory_limit"] == "1GB"
+    assert captured["duckdb_threads"] == 2
+
+
+def test_legacy_pandas_engine_config_is_rejected(tmp_path):
+    config = _write_batch_config(
+        tmp_path / "config.yaml",
+        mode="dry_run",
+        start_period="2025-01-31",
+        end_period="2025-01-31",
+        processing_engine="pandas",
+    )
+
+    with pytest.raises(ValueError, match="processing_engine is retired"):
+        resolve_historical_batch_config(config_path=config)
+
+
+def test_missing_engine_config_resolves_to_fixed_duckdb(tmp_path):
+    config = _write_batch_config(
+        tmp_path / "config.yaml",
+        mode="dry_run",
+        start_period="2025-01-31",
+        end_period="2025-01-31",
+    )
+
+    effective = resolve_historical_batch_config(config_path=config)
+
+    assert effective["processing_engine"] == "duckdb"
+    assert effective["sources"]["processing_engine"] == "fixed"
 
 
 def test_cli_prints_valid_json(capsys, monkeypatch, tmp_path):

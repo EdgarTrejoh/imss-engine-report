@@ -25,9 +25,27 @@ def main() -> None:
         default="outputs/processing",
         help="Directory for temporary processing outputs and manifests.",
     )
-    parser.add_argument("--chunk-size", type=int, default=400000, help="CSV chunk size.")
-    parser.add_argument("--encoding", default="latin-1", help="Expected raw file encoding.")
+    parser.add_argument("--chunk-size", type=int, default=100000, help="CSV chunk size.")
+    parser.add_argument(
+        "--encoding",
+        choices=("auto", "latin-1", "utf-8-sig"),
+        default="auto",
+        help="Raw encoding resolution mode.",
+    )
     parser.add_argument("--separator", default="|", help="Expected raw file separator.")
+    parser.add_argument("--duckdb-memory-limit", default="1GB", help="DuckDB memory limit.")
+    parser.add_argument("--duckdb-threads", type=int, default=2, help="DuckDB worker threads.")
+    parser.add_argument(
+        "--preserve-temporary-on-failure",
+        action="store_true",
+        help="Keep per-run DuckDB temporary files after a failure.",
+    )
+    parser.add_argument("--write-parquet", action="store_true")
+    parser.add_argument(
+        "--parquet-compression",
+        choices=("zstd", "snappy"),
+        default="zstd",
+    )
     args = parser.parse_args()
 
     manifest, manifest_path = process_imss_raw_period(
@@ -37,6 +55,11 @@ def main() -> None:
         chunk_size=args.chunk_size,
         encoding=args.encoding,
         separator=args.separator,
+        duckdb_memory_limit=args.duckdb_memory_limit,
+        duckdb_threads=args.duckdb_threads,
+        preserve_temporary_on_failure=args.preserve_temporary_on_failure,
+        write_parquet=args.write_parquet,
+        parquet_compression=args.parquet_compression,
     )
     payload = {
         "manifest_path": str(manifest_path),

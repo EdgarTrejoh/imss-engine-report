@@ -53,6 +53,8 @@ def main() -> None:
         default=None,
         help="PostgreSQL staging-to-final promotion batch size.",
     )
+    parser.add_argument("--duckdb-memory-limit", default=None)
+    parser.add_argument("--duckdb-threads", type=int, default=None)
     args = parser.parse_args()
 
     try:
@@ -71,6 +73,8 @@ def main() -> None:
             cli_chunk_size=args.chunk_size,
             cli_batch_size=args.batch_size,
             cli_promotion_batch_size=args.promotion_batch_size,
+            cli_duckdb_memory_limit=args.duckdb_memory_limit,
+            cli_duckdb_threads=args.duckdb_threads,
         )
         if effective["mode"] == "dry_run":
             result, manifest_path = plan_historical_batch(
@@ -96,6 +100,8 @@ def main() -> None:
                 chunk_size=effective["chunk_size"],
                 batch_size=effective["batch_size"],
                 promotion_batch_size=effective["promotion_batch_size"],
+                duckdb_memory_limit=effective["duckdb_memory_limit"],
+                duckdb_threads=effective["duckdb_threads"],
                 effective_config=effective,
             )
             action = result["action"]
