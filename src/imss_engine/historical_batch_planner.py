@@ -34,9 +34,11 @@ PLANNER_ACTIONS = (
 HISTORICAL_BATCH_DEFAULTS = {
     "raw_root": str(DEFAULT_RAW_ROOT),
     "output_dir": str(DEFAULT_BATCH_OUTPUT_DIR),
-    "chunk_size": 400000,
+    "chunk_size": 100000,
     "batch_size": 5000,
     "promotion_batch_size": 50000,
+    "duckdb_memory_limit": "1GB",
+    "duckdb_threads": 2,
     "stop_on_failure": True,
 }
 
@@ -67,6 +69,8 @@ def resolve_historical_batch_config(
     cli_chunk_size: int | None = None,
     cli_batch_size: int | None = None,
     cli_promotion_batch_size: int | None = None,
+    cli_duckdb_memory_limit: str | None = None,
+    cli_duckdb_threads: int | None = None,
 ) -> dict:
     """Resolve historical batch settings with CLI > config > safe defaults."""
     config = load_config(config_path) or {}
@@ -118,6 +122,21 @@ def resolve_historical_batch_config(
         cli_promotion_batch_size,
         default=HISTORICAL_BATCH_DEFAULTS["promotion_batch_size"],
     )
+    legacy_processing_engine = section.get("processing_engine")
+    if legacy_processing_engine not in {None, "duckdb"}:
+        raise ValueError(
+            "imss_historical_batch.processing_engine is retired; only DuckDB is supported."
+        )
+    duckdb_memory_limit, duckdb_memory_limit_source = resolve(
+        "duckdb_memory_limit",
+        cli_duckdb_memory_limit,
+        default=HISTORICAL_BATCH_DEFAULTS["duckdb_memory_limit"],
+    )
+    duckdb_threads, duckdb_threads_source = resolve(
+        "duckdb_threads",
+        cli_duckdb_threads,
+        default=HISTORICAL_BATCH_DEFAULTS["duckdb_threads"],
+    )
 
     if mode not in {"dry_run", "execute"}:
         raise ValueError("historical batch mode must be dry_run or execute")
@@ -140,6 +159,7 @@ def resolve_historical_batch_config(
         "chunk_size": chunk_size,
         "batch_size": batch_size,
         "promotion_batch_size": promotion_batch_size,
+        "duckdb_threads": duckdb_threads,
     }
     for name, value in numeric_values.items():
         numeric_values[name] = int(value)
@@ -158,6 +178,8 @@ def resolve_historical_batch_config(
         "raw_root": str(raw_root),
         "output_dir": str(output_dir),
         **numeric_values,
+        "processing_engine": "duckdb",
+        "duckdb_memory_limit": str(duckdb_memory_limit),
         "sources": {
             "mode": mode_source,
             "start_period": start_source,
@@ -169,6 +191,9 @@ def resolve_historical_batch_config(
             "chunk_size": chunk_size_source,
             "batch_size": batch_size_source,
             "promotion_batch_size": promotion_source,
+            "processing_engine": "fixed",
+            "duckdb_memory_limit": duckdb_memory_limit_source,
+            "duckdb_threads": duckdb_threads_source,
         },
     }
 
@@ -451,9 +476,11 @@ def execute_historical_batch(
     run_id: str | None = None,
     max_periods: int,
     stop_on_failure: bool = True,
-    chunk_size: int = 400000,
+    chunk_size: int = 100000,
     batch_size: int = 5000,
     promotion_batch_size: int = 50000,
+    duckdb_memory_limit: str = "1GB",
+    duckdb_threads: int = 2,
     effective_config: dict | None = None,
     dependencies: HistoricalBatchPlannerDependencies = HistoricalBatchPlannerDependencies(),
 ) -> tuple[dict, Path]:
@@ -512,6 +539,8 @@ def execute_historical_batch(
             chunk_size=chunk_size,
             batch_size=batch_size,
             promotion_batch_size=promotion_batch_size,
+            duckdb_memory_limit=duckdb_memory_limit,
+            duckdb_threads=duckdb_threads,
             run_id=f"{effective_run_id}_{period}",
         )
         execution = {

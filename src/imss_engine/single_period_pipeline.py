@@ -126,6 +126,9 @@ def _base_manifest(
         "download": None,
         "raw_validation": None,
         "raw_processing": None,
+        "encoding_requested": None,
+        "encoding_detected": None,
+        "encoding_candidates_tried": [],
         "postgres": {
             "check_existing": None,
             "register_period_control": None,
@@ -210,6 +213,9 @@ def execute_single_period_pipeline(
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     batch_size: int = 5000,
     promotion_batch_size: int = 50000,
+    duckdb_memory_limit: str = "1GB",
+    duckdb_threads: int = 2,
+    preserve_temporary_on_failure: bool = False,
     run_id: str | None = None,
     dependencies: PipelineDependencies = PipelineDependencies(),
 ) -> tuple[dict, Path]:
@@ -256,6 +262,9 @@ def execute_single_period_pipeline(
             "manifest_path": str(raw_validation_manifest_path),
             "result": raw_validation,
         }
+        manifest["encoding_requested"] = raw_validation.get("encoding_requested")
+        manifest["encoding_detected"] = raw_validation.get("encoding_detected")
+        manifest["encoding_candidates_tried"] = raw_validation.get("encoding_candidates_tried", [])
         _record_step(manifest, "raw_validation", raw_validation.get("status"), manifest["raw_validation"])
         if not raw_validation.get("valid"):
             raise SinglePeriodPipelineError(
@@ -267,6 +276,12 @@ def execute_single_period_pipeline(
             raw_root=raw_root,
             output_dir=output_dir,
             chunk_size=chunk_size,
+            encoding=raw_validation["encoding_detected"],
+            validation_result=raw_validation,
+            validation_manifest_path=raw_validation_manifest_path,
+            duckdb_memory_limit=duckdb_memory_limit,
+            duckdb_threads=duckdb_threads,
+            preserve_temporary_on_failure=preserve_temporary_on_failure,
         )
         manifest["raw_processing"] = {
             "manifest_path": str(processing_manifest_path),

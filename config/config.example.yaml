@@ -2,7 +2,7 @@
 # This file is safe to version: it contains no credentials and no local paths.
 etl:
   base_url: "http://datos.imss.gob.mx/sites/default/files/asg-{}.csv"
-  chunk_size: 400000
+  chunk_size: 100000
 
   # New insert-only concentrado modes:
   # - mes_consulta: process one explicit period.
@@ -19,3 +19,18 @@ etl:
   # Legacy compatibility only.
   # Must be empty when mode is mes_consulta or periodo_consulta.
   meses: []
+
+imss_historical_batch:
+  enabled: true
+  mode: "dry_run"
+  start_period: "YYYY-01-31"
+  end_period: "YYYY-12-31"
+  max_periods_per_run: 3
+  stop_on_failure: true
+  raw_root: "data/raw/imss/asegurados"
+  output_dir: "outputs/pipeline"
+  chunk_size: 100000
+  duckdb_memory_limit: "1GB"
+  duckdb_threads: 2
+  batch_size: 5000
+  promotion_batch_size: 50000

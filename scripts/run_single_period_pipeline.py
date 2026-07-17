@@ -38,7 +38,10 @@ def main() -> None:
         default=50000,
         help="PostgreSQL staging-to-final promotion batch size.",
     )
-    parser.add_argument("--chunk-size", type=int, default=400000, help="Raw CSV processing chunk size.")
+    parser.add_argument("--chunk-size", type=int, default=100000, help="Raw CSV processing chunk size.")
+    parser.add_argument("--duckdb-memory-limit", default="1GB")
+    parser.add_argument("--duckdb-threads", type=int, default=2)
+    parser.add_argument("--preserve-temporary-on-failure", action="store_true")
     parser.add_argument("--run-id", default=None, help="Optional explicit run_id.")
     args = parser.parse_args()
 
@@ -65,6 +68,9 @@ def main() -> None:
                 batch_size=args.batch_size,
                 promotion_batch_size=args.promotion_batch_size,
                 run_id=args.run_id,
+                duckdb_memory_limit=args.duckdb_memory_limit,
+                duckdb_threads=args.duckdb_threads,
+                preserve_temporary_on_failure=args.preserve_temporary_on_failure,
             )
     except Exception as error:
         payload = {

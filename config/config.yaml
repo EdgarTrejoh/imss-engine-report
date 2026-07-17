@@ -1,6 +1,8 @@
 etl:
   base_url: "http://datos.imss.gob.mx/sites/default/files/asg-{}.csv"
-  chunk_size: 400000
+  chunk_size: 100000
+  duckdb_memory_limit: "1GB"
+  duckdb_threads: 2
   mode: "periodo_consulta"
   mes_consulta: "2026-01-31"
   periodo_consulta:
@@ -11,3 +13,18 @@ etl:
   output_file: "imss_analisis_profundo.csv"
   concentrado_file: "data/processed/imss_concentrado.csv"
   meses: []
+
+imss_historical_batch:
+  enabled: true
+  mode: "execute"
+  start_period: "2025-01-31"
+  end_period: "2025-12-31"
+  max_periods_per_run: 3
+  stop_on_failure: true
+  raw_root: "data/raw/imss/asegurados"
+  output_dir: "outputs/pipeline"
+  chunk_size: 100000
+  duckdb_memory_limit: "1GB"
+  duckdb_threads: 2
+  batch_size: 5000
+  promotion_batch_size: 50000

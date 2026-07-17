@@ -7,7 +7,7 @@
 - Dependency versions in `requirements.txt` are not pinned.
 - Some legacy/exploratory scripts may contain hardcoded local paths or assumptions.
 - `main.py`, legacy visualizations and notebook analyses are outside the Phase 2 stabilization scope.
-- PostgreSQL, API, dashboard, Docker and advanced CI/CD are intentionally not implemented in this phase.
+- API, dashboard, Docker and advanced CI/CD are intentionally not implemented in this phase.
 - GitHub Actions currently provides only lightweight test validation with fixtures and no network-dependent ETL execution.
 - Official catalog joins for sector, entity, sex, age and income ranges are pending until local documented catalog files are available.
 - The DuckDB audit validates generated CSV structure and arithmetic consistency, but validation against official IMSS bulletins remains an external control and does not replace methodology validation.
@@ -18,7 +18,20 @@
 - Run manifests provide local technical traceability, but they are not a historical registry or period-level upsert log.
 - Integrated DuckDB audit is part of legacy full-output run certification. If it fails after final CSV publication, the manifest records a failed run even though the CSV remains on disk.
 - The `mes_consulta` and `periodo_consulta` concentrado flow uses light period audit plus manifest. It does not run DuckDB automatically over the full concentrado CSV.
-- Two additional periods should be validated before treating the Phase 2 workflow as broadly stable.
+- The January 2025 dimensional incident and its corrected local validation are
+  documented in `docs/incidents/2025-01_dimension_dtype_incident.md`.
 - `ptpd` still needs historical review for periods where the source column does not appear.
 - Do not open large generated CSV files in Excel; use DuckDB-based audit outputs or analytical tools built for large files.
 - The concentrado is insert-only. There is no approved overwrite, `full_refresh` or `upsert_period` behavior yet.
+- DuckDB is mandatory for productive raw consolidation. There is no pandas
+  aggregation fallback. A missing DuckDB dependency causes a controlled failure.
+- High-cardinality runs require enough temporary disk for per-run Parquet
+  partials, DuckDB spill files and atomic CSV publication.
+- January 2025 contains 4,643,036 rows and the same number of unique analytical
+  keys. Equal raw/output row counts are expected because the source is already
+  at final analytical granularity.
+- The January 2025 CSV output has 53 columns and is approximately 2.96 times the
+  raw size. Prefer the Zstandard Parquet artifact for analytical use.
+- Historical checkpoint documents may contain superseded defaults such as
+  `chunk_size: 400000` or an operational engine selector. Use README and
+  `docs/operations/historical_batch_duckdb.md` for current commands.

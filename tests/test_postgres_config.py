@@ -2,6 +2,16 @@ from src.imss_engine.postgres.config import PostgresConfig, load_dotenv_if_exist
 
 
 def test_load_dotenv_if_exists_does_not_override_existing_env(tmp_path, monkeypatch):
+    postgres_env_keys = (
+        "IMSS_PG_HOST",
+        "IMSS_PG_PORT",
+        "IMSS_PG_DATABASE",
+        "IMSS_PG_USER",
+        "IMSS_PG_PASSWORD",
+    )
+    for key in postgres_env_keys:
+        monkeypatch.delenv(key, raising=False)
+
     dotenv = tmp_path / ".env"
     dotenv.write_text(
         "\n".join(
